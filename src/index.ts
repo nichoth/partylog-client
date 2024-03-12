@@ -268,10 +268,9 @@ export class IndexedStore {
         return true
     }
 
-    async clean () {
-        const store = await this.init()
-        store.db.close()
-        await promisify(indexedDB.deleteDatabase(store.name))
+    async clean ():Promise<IDBOpenDBRequest> {
+        (await this.db).close()
+        return indexedDB.deleteDatabase(this.name)
     }
 
     async get ({ index, order }) {
