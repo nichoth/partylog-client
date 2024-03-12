@@ -305,15 +305,25 @@ export class IndexedStore {
         }
     }
 
+    /**
+     * Get the last added `seq` number of action.
+     * @returns {number}
+     */
     async getLastAdded () {
-        const store = await this.init()
-        const cursor = await promisify(store.os('log').openCursor(null, 'prev'))
+        const cursor = await (await this.os('log')).openCursor(null, 'prev')
         return cursor ? cursor.value.added : 0
     }
 
+    /**
+     * Get { received, sent } numbers for last synced
+     * @returns {Promise<{ received:number, sent:number }>}
+     */
     async getLastSynced () {
-        const store = await this.init()
-        const data = await promisify(store.os('extra').get('lastSynced'))
+        const data:{
+            received,
+            sent
+        } = await (await this.os('extra')).get('lastSynced')
+
         if (data) {
             return { received: data.received, sent: data.sent }
         } else {
