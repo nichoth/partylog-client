@@ -331,21 +331,17 @@ export class IndexedStore {
         }
     }
 
-    // os (name, write) {
-    //     const mode = write ? 'readwrite' : 'readonly'
-    //     return this.db.transaction(name, mode).objectStore(name)
-    // }
+    async remove (id:string) {
+        const entry:{
+            added,
+            action,
+            meta
+        } = await (await this.os('log')).index('id').get('id')
+        if (!entry) return false;
 
-    async remove (id) {
-        const store = await this.init()
-        const entry = await promisify(store.os('log').index('id').get(id))
-        if (!entry) {
-            return false
-        } else {
-            await promisify(store.os('log', 'write').delete(entry.added))
-            entry.meta.added = entry.added
-            return [entry.action, entry.meta]
-        }
+        (await this.os('log', 'write')).delete!(entry.added)
+        entry.meta.added = entry.added
+        return [entry.action, entry.meta]
     }
 
     async removeReason (reason, criteria, callback) {
