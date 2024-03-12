@@ -336,7 +336,7 @@ export class IndexedStore {
             added,
             action,
             meta
-        } = await (await this.os('log')).index('id').get('id')
+        } = await (await this.os('log')).index('id').get(id)
         if (!entry) return false;
 
         (await this.os('log', 'write')).delete!(entry.added)
