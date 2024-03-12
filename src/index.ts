@@ -1,5 +1,5 @@
 import { createDebug } from '@nichoth/debug'
-import { IDBPDatabase, openDB } from 'idb'
+import { IDBPCursorWithValue, IDBPDatabase, openDB } from 'idb'
 const debug = createDebug()
 
 const VERSION = 1
@@ -273,39 +273,36 @@ export class IndexedStore {
         return indexedDB.deleteDatabase(this.name)
     }
 
-    async get ({ index, order }) {
-        const store = await this.init()
-        return new Promise((resolve, reject) => {
-            const log = store.os('log')
-            let request
-            if (index) {
-                if (order === 'created') {
-                    request = log.index('created').openCursor(null, 'prev')
-                } else {
-                    const keyRange = IDBKeyRange.only(index)
-                    request = log.index('indexes').openCursor(keyRange, 'prev')
-                }
-            } else if (order === 'created') {
-                request = log.index('created').openCursor(null, 'prev')
-            } else {
-                request = log.openCursor(null, 'prev')
-            }
-            rejectify(request, reject)
+    async get ({ index, order }:{ index:string; order?:'created' }):Promise<void> {
+        const log = await this.os('log')
 
-            const entries = []
-            request.onsuccess = function (e) {
-                const cursor = e.target.result
-                if (!cursor) {
-                    resolve({ entries })
-                    return
-                }
-                if (!index || cursor.value.indexes.includes(index)) {
-                    cursor.value.meta.added = cursor.value.added
-                    entries.unshift([cursor.value.action, cursor.value.meta])
-                }
-                cursor.continue()
+        let request
+        if (index) {
+            if (order === 'created') {
+                request = log.index('created')
+            } else {
+                const keyRange = IDBKeyRange.only(index)
+                request = log.index('indexes').openCursor(keyRange, 'prev')
             }
-        })
+        } else if (order === 'created') {
+            request = log.index('created').openCursor(null, 'prev')
+        } else {
+            request = log.openCursor(null, 'prev')
+        }
+
+        request.onerror = (err) => { throw err }
+
+        type entry = [AnyAction, MetaData]
+        const entries:entry[] = []
+        request.onsuccess = (ev) => {
+            const cursor = ev.target.result
+            if (!cursor) return entries
+            if (!index || cursor.value.indexes.includes(index)) {
+                cursor.value.meta.added = cursor.value.added
+                entries.unshift([cursor.value.action, cursor.value.meta])
+            }
+            cursor.continue()
+        }
     }
 
     async getLastAdded () {
@@ -427,4 +424,10 @@ export class IndexedStore {
 
 function isDefined (value) {
     return typeof value !== 'undefined'
+}
+
+function rejectify (request, reject) {
+    request.onerror = e => {
+        reject(e.target.error)
+    }
 }
