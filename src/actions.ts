@@ -64,6 +64,7 @@ export interface IActionCreatorFactory {
       commonMeta?:Meta,
       isError?:boolean,
     ):ActionCreator<Payload>;
+
     /**
      * Creates Action Creator that produces actions with given `type` and payload
      * of type `Payload`.
@@ -98,7 +99,7 @@ export function ActionCreatorFactory (
     function actionCreator<Payload> (
         type:string,
         commonMeta?:Meta,
-        isError:((payload: Payload) => boolean)|boolean = defaultIsError,
+        isError:((payload:Payload) => boolean)|boolean = defaultIsError,
     ) {
         const fullType = base + type
 
