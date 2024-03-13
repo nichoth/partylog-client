@@ -7,8 +7,8 @@ Client-side log store
 
 __the data format__
 
-We use actions and metadata. Actions are the event-sourcing version --
--- meaning something you would pass to a `reduce` function.
+We use actions and metadata. Actions event-sourcing style -- something you
+would pass to a `reduce` function.
 
 ```js
 // action
