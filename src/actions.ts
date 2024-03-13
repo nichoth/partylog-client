@@ -1,13 +1,13 @@
-export interface AnyAction {
-    [extra:string]:any
-    type: any;
-}
+// export interface AnyAction {
+//     [extra:string]:any
+//     type:string;
+// }
 
 export type Meta = null|{ [key:string]:any };
 
-export interface Action<T> extends AnyAction {
+export interface Action<T = void> {
     type:string;
-    payload:T;
+    payload?:T;
     error?:boolean;
     meta?:Meta;
 }
@@ -40,7 +40,7 @@ export interface ActionCreator<Payload> {
      *    const somethingHappenedArray =
      *      actionArray.filter(somethingHappened.match);
      */
-    match: (action:AnyAction) => action is Action<Payload>;
+    match: (action:Action<Payload>) => action is Action<Payload>;
     /**
      * Creates action with given payload and metadata.
      *
@@ -131,7 +131,7 @@ export function ActionCreatorFactory (
             {
                 type: fullType,
                 toString: () => fullType,
-                match: (action:AnyAction):action is Action<Payload> =>
+                match: (action:Action<Payload>):action is Action<Payload> =>
                     action.type === fullType,
             },
         ) as ActionCreator<Payload>

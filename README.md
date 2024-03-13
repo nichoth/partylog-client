@@ -3,12 +3,17 @@
 [![semantic versioning](https://img.shields.io/badge/semver-2.0.0-blue?logo=semver&style=flat-square)](https://semver.org/)
 [![module](https://img.shields.io/badge/module-ESM%2FCJS-blue?style=flat-square)](README.md)
 
-Client-side log store
+A client-side log store
 
-__the data format__
+The Indexed DB database in the browser *is the source of truth*. The server
+provides backup & state sync amongst multiple devices.
+
+## the data format
 
 We use actions and metadata. Actions are event-sourcing style -- something you
 would pass to a `reduce` function.
+
+### Actions
 
 ```js
 // action
@@ -33,6 +38,8 @@ const myAction = renameUser({ userId: 'alice', name: 'alice' })
 }
 ```
 
+### Metadata
+
 ```js
 // metadata
 export interface MetaData {
@@ -55,13 +62,13 @@ npm i -S @bicycle-codes/partylog-client
 ### IndexedStore
 
 #### create a new store
-Constructor takes an optional `name` parameter, which defaults to 'logparty'.
+Constructor takes an optional `name` parameter, which defaults to 'partylog'.
 
 ```ts
 class IndexedStore {
-    name:string
-    adding:Record<string, boolean>
-    db:Promise<IDBDatabase>
+    readonly name:string
+    readonly adding:Record<string, boolean>
+    readonly db:Promise<IDBDatabase>
 
     constructor (name = 'logparty')
 ```

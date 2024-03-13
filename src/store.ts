@@ -3,19 +3,19 @@ import { toString } from 'uint8arrays'
 import stringify from 'json-canon'
 import { blake3 } from '@noble/hashes/blake3'
 import ts from 'monotonic-timestamp'
-import { AnyAction } from './actions.js'
+import { Action } from './actions.js'
 const debug = createDebug()
 
 const VERSION = 1
 
 debug('version', VERSION)
 
-export interface Action {
-    /**
-     * Action type name.
-     */
-    type: string
-}
+// export interface Action {
+//     /**
+//      * Action type name.
+//      */
+//     type: string
+// }
 
 export type ID = string
 
@@ -47,16 +47,16 @@ export interface MetaData {
     time:number
 }
 
-export interface LogPage {
+export interface LogPage<T> {
     /**
      * Pagination page.
      */
-    entries:[Action, MetaData][]
+    entries:[Action<T>, MetaData][]
 
     /**
      * Next page loader.
      */
-    next?():Promise<LogPage>
+    next?():Promise<LogPage<T>>
 }
 
 export interface ReadonlyListener<
@@ -93,9 +93,9 @@ export interface Criteria {
     youngerThan?:MetaData
 }
 
-export interface Entry {
+export interface Entry<T=void> {
     seq:number;
-    action:AnyAction;
+    action:Action<T>;
     created:string;
     id:string;
     meta:MetaData;
@@ -103,12 +103,16 @@ export interface Entry {
     time:number;
 }
 
+/**
+ * A log store that uses IndexedDB.
+ */
 export class IndexedStore {
     readonly name:string
+    // a map from timestamp to boolean
     readonly adding:Record<string, boolean>
     readonly db:Promise<IDBDatabase>
 
-    constructor (name = 'logparty') {
+    constructor (name = 'partylog') {
         this.name = name
         this.adding = {}
 
@@ -143,10 +147,10 @@ export class IndexedStore {
     }
 
     /**
-     * Get a new objectstore
+     * Get a new objectstore.
      *
      * @param {'log'|'extra'} name Object store name, 'log' | 'extra'
-     * @param write Writable or read only?
+     * @param {'write'} [write] Writable or read only?
      * @returns {Promise<IDBObjectStore>}
      */
     async os (name:'log'|'extra', write?:'write'):Promise<IDBObjectStore> {
@@ -157,43 +161,39 @@ export class IndexedStore {
     /**
      * Add an action to `IndexedDB`. Valid `MetaData` will be created.
      *
-     * ID is just the hash of the metadata.
+     * ID is the hash of the metadata.
      *
-     * @param {AnyAction} action
+     * @param {Action} action
      * @param {MetaData} meta
-     * @returns {Promise<false|MetaData>} Return false if the add operation
+     * @returns {Promise<null|MetaData>} Return `null` if the add operation
      * failed, eg b/c the given ID already exists. Return `MetaData` otherwise.
      */
-    async add (
-        action:AnyAction,
-        meta:Partial<MetaData> = {}
+    async add<T=void> (
+        action:Action<T>,
+        meta:{ reasons?:string[]; subprotocol?:string } = {}
     ):Promise<MetaData|null> {
         const seq = (await this.getLastAdded() + 1)
-        const created = ts()
+        const created:number = ts()
 
-        const newEntryData = {
+        // take the hash of the metadata
+        const newID = toString(blake3(stringify({
             seq,
-            action,
-            created,
-            meta,
-            reasons: meta.reasons,
-            time: created
-        }
-
-        const newID = toString(blake3(stringify(newEntryData)), 'base64urlpad')
-
-        // could have `subprotocol` on the passed in metadata
-        const newMetadata:MetaData = {
-            ...meta,
-            seq,
-            id: newID,
             reasons: meta.reasons || [],
+            subprotocol: meta.subprotocol,
+            time: created
+        })), 'base64urlpad')
+
+        const newMetadata:MetaData = {
+            id: newID,
+            seq,
+            reasons: meta.reasons || [],
+            subprotocol: meta.subprotocol,
             time: created
         }
 
-        const entry:Entry = {
+        const entry:Entry<T> = {
             action,
-            created,
+            created: '' + created,
             meta: newMetadata,
             seq,
             reasons: newMetadata.reasons,
@@ -221,9 +221,9 @@ export class IndexedStore {
      * Get an action by ID
      *
      * @param {string} id The ID
-     * @returns {Promise<[AnyAction, MetaData]|[null, null]>}
+     * @returns {Promise<[Action<T>, MetaData]|[null, null]>}
      */
-    async byId (id:string):Promise<[AnyAction, MetaData]|[null, null]> {
+    async byId<T> (id:string):Promise<[Action<T>, MetaData]|[null, null]> {
         const result = await promisify<{
             action,
             meta
@@ -273,10 +273,10 @@ export class IndexedStore {
      * @param {{ index, order }} opts Query options.
      * @returns Promise with first page.
      */
-    async get ({ index, order }:{
+    async get<T=void> ({ index, order }:{
         index:string;
         order?:'created'
-    }):Promise<LogPage> {
+    }):Promise<LogPage<T>> {
         return new Promise((resolve, reject) => {
             this.os('log').then(log => {
                 let request
@@ -295,10 +295,7 @@ export class IndexedStore {
 
                 request.onerror = (err) => { reject(err) }
 
-                // type entry = [AnyAction, MetaData]
-                type entry = [AnyAction, MetaData]
-                const entries:entry[] = []
-                // const entries:Entry[] = []
+                const entries:[Action<T>, MetaData][] = []
                 request.onsuccess = (ev) => {
                     const cursor = ev.target.result
                     if (!cursor) return resolve({ entries })

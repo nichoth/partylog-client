@@ -7,7 +7,7 @@ let store:InstanceType<typeof IndexedStore>
 test('IndexedStore', t => {
     store = new IndexedStore()
     t.ok(store, 'should create a store')
-    t.equal(store.name, 'logparty', 'should have the default store name')
+    t.equal(store.name, 'partylog', 'should have the default store name')
 })
 
 let meta1:MetaData|null
@@ -17,6 +17,7 @@ test('add something to the store', async t => {
     t.ok(meta1!.id, 'should return metadata with an ID')
     t.equal(meta1!.seq, 1, 'should have the right sequence number')
 
+    // @ts-expect-error  b/c testing
     const meta2 = await store.add({ type: 'testing' }, { seq: 7 })
     t.equal((meta2 as MetaData).seq, 2,
         'should overwrite the sequence I passed in')
