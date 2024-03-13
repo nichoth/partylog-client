@@ -219,6 +219,7 @@ export class IndexedStore {
 
     /**
      * Get an action by ID
+     *
      * @param {string} id The ID
      * @returns {Promise<[AnyAction, MetaData]|[null, null]>}
      */
@@ -262,9 +263,10 @@ export class IndexedStore {
     }
 
     /**
-     * Return a Promise with the first page. Page object has `entries` property
-     * with part of results and `next` property with a function to load the
-     * next page. If it was the last page, `next` property should be empty.
+     * Return a Promise with the first page. The Page object has a property
+     * `entries` property with part of results and `next` property with a
+     * function to load the * next page. If it was the last page, `next`
+     * property should be empty.
      *
      * We need a pagination API because the log could be very big.
      *
@@ -311,7 +313,7 @@ export class IndexedStore {
     }
 
     /**
-     * Get the last added `seq` number of action.
+     * Get the last added `seq` number of actions.
      * @returns {Promise<number>}
      */
     async getLastAdded ():Promise<number> {
@@ -328,8 +330,8 @@ export class IndexedStore {
      */
     async getLastSynced ():Promise<{ received:number, sent:number }> {
         const data:{
-            received,
-            sent
+            received:number,
+            sent:number
         } = await promisify<{ received, sent }>(
             (await this.os('extra')).get('lastSynced')
         )
