@@ -6,17 +6,20 @@
 Client-side log store
 
 __the data format__
-We use actions and metadata. Actions are in the event-sourcing meaning of the
-word -- something you would pass to a `reduce` function.
+We use actions and metadata. Actions are the event-sourcing version --
+-- meaning something you would pass to a `reduce` function.
 
 ```js
 // action
-export const renameUser = createAction<{
+import { ActionCreatorFactory } from '../src/actions.js'
+
+const createAction = ActionCreatorFactory()
+const renameUser = createAction<{
     userId:string,
     name:string
 }>('user/rename')
-const rename = {
-}
+
+const myAction = renameUser({ userId: 'alice', name: 'alice' })
 ```
 
 ```js
@@ -107,38 +110,32 @@ test('add something to the store', async t => {
 ```
 
 ### Actions
+Helpers to create action objects of various types.
 
-A helper to create action objects of various types.
+#### ActionCreator
+Create a function that will create actions of a given type.
 
-#### ActionCreatorFactory
-
-##### API
 ```ts
-function ActionCreatorFactory (
-    prefix?:string|null,
-    defaultIsError:(payload:any) => boolean = p => p instanceof Error,
-):IActionCreatorFactory
+const ActionCreator = function<T> (type:string)
 ```
 
 ##### example
 ```ts
-import { ActionCreatorFactory } from '@bicycle-codes/partylog-client/actions'
+import { test } from '@bicycle-codes/tapzero'
+import { ActionCreator } from '@bicycle-codes/partylog-client/actions'
 
-const createAction = ActionCreatorFactory()
-const renameUser = createAction<{
-    userId:string,
-    name:string
-}>('user/rename')
+test('ActionCreator', t => {
+    // create a factory function
+    const renameUser = ActionCreator<{ id:string, name:string }>('user/rename')
+    // create the action object
+    const action = renameUser({ id: 'alice', name: 'alice' })
 
-const action = renameUser({ userId: 'alice', name: 'alice' })
-/*
-=> {
-  "type": "user/rename",
-  "payload": {
-    "userId": "alice",
-    "name": "alice"
-  }
-}
-*/
+    t.deepEqual(action, {
+        type: 'user/rename',
+        payload: {
+            name: 'alice',
+            id: 'alice'
+        }
+    }, 'should create the right action object')
+})
 ```
-

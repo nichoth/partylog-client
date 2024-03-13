@@ -139,3 +139,9 @@ export function ActionCreatorFactory (
 
     return actionCreator
 }
+
+const _createAction = ActionCreatorFactory()
+
+export const ActionCreator = function<T> (type:string) {
+    return _createAction<T>(type)
+}

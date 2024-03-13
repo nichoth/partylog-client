@@ -1,6 +1,6 @@
 import { test } from '@bicycle-codes/tapzero'
 import { IndexedStore, MetaData } from '../src/store.js'
-import { ActionCreatorFactory } from '../src/actions.js'
+import { ActionCreatorFactory, ActionCreator } from '../src/actions.js'
 
 let store:InstanceType<typeof IndexedStore>
 
@@ -46,4 +46,17 @@ test('action creating', t => {
             userId: 'alice'
         }
     }, 'should create the expected action object')
+})
+
+test('ActionCreator', t => {
+    const renameUser = ActionCreator<{ id:string, name:string }>('user/rename')
+    const action = renameUser({ id: 'alice', name: 'alice' })
+
+    t.deepEqual(action, {
+        type: 'user/rename',
+        payload: {
+            name: 'alice',
+            id: 'alice'
+        }
+    }, 'should create the right action object')
 })
