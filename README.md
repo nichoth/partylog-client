@@ -150,3 +150,17 @@ test('ActionCreator', t => {
     }, 'should create the right action object')
 })
 ```
+
+#### match
+The action creator function has a method `match` that will return `true` if a
+given action has a matching `type`.
+
+```js
+test('action matcher', t => {
+    t.equal(renameUser.match(action), true, 'should match a matching action')
+    t.equal(renameUser.match({ type: 'user/rename' }), true,
+        'shoudl match a matching object')
+    t.equal(renameUser.match({ type: 'testing' }), false,
+        'should not match a mismatched action object')
+})
+```

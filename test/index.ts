@@ -30,6 +30,7 @@ test('can get something from the store', async t => {
 })
 
 test('action creating', t => {
+    // this is an internal function, undocumented
     const createAction = ActionCreatorFactory()
     const renameUser = createAction<{
         userId:string,
@@ -49,9 +50,12 @@ test('action creating', t => {
     }, 'should create the expected action object')
 })
 
+let renameUser:ReturnType<typeof ActionCreator<{ id, name }>>
+let action
 test('ActionCreator', t => {
-    const renameUser = ActionCreator<{ id:string, name:string }>('user/rename')
-    const action = renameUser({ id: 'alice', name: 'alice' })
+    // this is the API that is exposed
+    renameUser = ActionCreator<{ id:string, name:string }>('user/rename')
+    action = renameUser({ id: 'alice', name: 'alice' })
 
     t.deepEqual(action, {
         type: 'user/rename',
@@ -60,4 +64,12 @@ test('ActionCreator', t => {
             id: 'alice'
         }
     }, 'should create the right action object')
+})
+
+test('action matcher', t => {
+    t.equal(renameUser.match(action), true, 'should match a matching action')
+    t.equal(renameUser.match({ type: 'user/rename' }), true,
+        'shoudl match a matching object')
+    t.equal(renameUser.match({ type: 'testing' }), false,
+        'should not match a mismatched action object')
 })
