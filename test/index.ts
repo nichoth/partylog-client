@@ -73,3 +73,8 @@ test('action matcher', t => {
     t.equal(renameUser.match({ type: 'testing' }), false,
         'should not match a mismatched action object')
 })
+
+test('action.toString', t => {
+    const str = renameUser.toString()
+    t.equal(str, 'user/rename', 'should return the right string for the action')
+})
