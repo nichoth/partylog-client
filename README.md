@@ -12,13 +12,12 @@ would pass to a `reduce` function.
 
 ```js
 // action
-import { ActionCreatorFactory } from '../src/actions.js'
+import { ActionCreator } from '@bicycle-codes/partylog-client/actions'
 
-const createAction = ActionCreatorFactory()
-const renameUser = createAction<{
+const renameUser = ActionCreator<
     userId:string,
     name:string
-}>('user/rename')
+>('user/rename')
 
 const myAction = renameUser({ userId: 'alice', name: 'alice' })
 ```
