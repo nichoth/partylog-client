@@ -52,6 +52,10 @@
       "import": "./dist/store.js",
       "require": "./dist/store.cjs"
     },
+    "./actions": {
+      "import": "./dist/actions.js",
+      "require": "./dist/actions.cjs"
+    },
     "./*": {
       "import": [
         "./dist/*.js",

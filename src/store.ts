@@ -3,6 +3,7 @@ import { toString } from 'uint8arrays'
 import stringify from 'json-canon'
 import { blake3 } from '@noble/hashes/blake3'
 import ts from 'monotonic-timestamp'
+import { AnyAction } from './actions.js'
 const debug = createDebug()
 
 const VERSION = 1
@@ -14,11 +15,6 @@ export interface Action {
      * Action type name.
      */
     type: string
-}
-
-export interface AnyAction {
-    [extra:string]:any
-    type:string
 }
 
 export type ID = string
@@ -323,7 +319,7 @@ export class IndexedStore {
             (await this.os('log')).openCursor(null, 'prev')
         )
 
-        return cursor ? cursor.value.seq : 0
+        return cursor ? parseInt(cursor.value.seq) : 0
     }
 
     /**

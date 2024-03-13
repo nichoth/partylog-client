@@ -1,5 +1,6 @@
 import { test } from '@bicycle-codes/tapzero'
 import { IndexedStore, MetaData } from '../src/store.js'
+import { ActionCreatorFactory } from '../src/actions.js'
 
 let store:InstanceType<typeof IndexedStore>
 
@@ -27,30 +28,22 @@ test('can get something from the store', async t => {
     t.equal(metadata?.seq, 1, 'should return the right metadata')
 })
 
-// export interface MetaData {
-//     /**
-//      * Sequence number of action in current log. Log fills it.
-//      */
-//     seq:number
+test('action creating', t => {
+    const createAction = ActionCreatorFactory()
+    const renameUser = createAction<{
+        userId:string,
+        name:string
+    }>('user/rename')
 
-//     /**
-//      * Action unique ID. Log sets it automatically.
-//      */
-//     id:ID
+    const action = renameUser({ userId: 'alice', name: 'alice' })
 
-//     /**
-//      * Why action should be kept in the log.
-//      * Actions without reasons will be removed.
-//      */
-//     reasons:string[]
+    console.log('**action**', JSON.stringify(action, null, 2))
 
-//     /**
-//      * Set code as reason and remove this reasons from previous actions.
-//      */
-//     subprotocol?:string
-
-//     /**
-//      * Action created time in current node time. Milliseconds since UNIX epoch.
-//      */
-//     time:number
-// }
+    t.deepEqual(action, {
+        type: 'user/rename',
+        payload: {
+            name: 'alice',
+            userId: 'alice'
+        }
+    }, 'should create the expected action object')
+})

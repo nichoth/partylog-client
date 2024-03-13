@@ -5,6 +5,40 @@
 
 Client-side log store
 
+__the data format__
+We use actions and metadata. Actions are in the event-sourcing meaning of the
+word -- something you would pass to a `reduce` function.
+
+```js
+// action
+export const renameUser = createAction<{
+    userId:string,
+    name:string
+}>('user/rename')
+const rename = {
+}
+```
+
+```js
+{
+    "type": "user/rename",
+    "payload": {
+        "foo": "bar"
+    }
+}
+```
+
+```js
+// metadata
+export interface MetaData {
+    seq:number
+    id:string
+    reasons:string[]
+    subprotocol?:string
+    time:number
+}
+```
+
 ## install
 
 ```sh
@@ -29,7 +63,7 @@ constructor (name = 'logparty')
 
 ```ts
 import { test } from '@bicycle-codes/tapzero'
-import { IndexedStore } from '@bicycle-codes/partylog-client'
+import { IndexedStore } from '@bicycle-codes/partylog-client/store'
 
 test('IndexedStore', t => {
     store = new IndexedStore()
@@ -55,19 +89,56 @@ incrementing integer is added to each one.)
 
 ```ts
 import { test } from '@bicycle-codes/tapzero'
-import { IndexedStore, MetaData } from '@bicycle-codes/partylog-client'
+import { IndexedStore, MetaData } from '@bicycle-codes/partylog-client/store'
 
 const store = new IndexedStore()
 
-let meta1:MetaData|false
+let meta1:MetaData|null
 test('add something to the store', async t => {
     meta1 = await store.add({ type: 'test' })
     t.ok(meta1, 'should create metadata')
-    t.ok((meta1 as MetaData).id, 'should return metadata with an ID')
-    t.equal((meta1 as MetaData).seq, 1, 'should have the right sequence number')
+    t.ok(meta1!.id, 'should return metadata with an ID')
+    t.equal(meta1!.seq, 1, 'should have the right sequence number')
 
     const meta2 = await store.add({ type: 'testing' }, { seq: 7 })
     t.equal((meta2 as MetaData).seq, 2,
-        'should overwrite the sequence I passed in')
+        'should overwrite the sequence number I passed in')
 })
 ```
+
+### Actions
+
+A helper to create action objects of various types.
+
+#### ActionCreatorFactory
+
+##### API
+```ts
+function ActionCreatorFactory (
+    prefix?:string|null,
+    defaultIsError:(payload:any) => boolean = p => p instanceof Error,
+):IActionCreatorFactory
+```
+
+##### example
+```ts
+import { ActionCreatorFactory } from '@bicycle-codes/partylog-client/actions'
+
+const createAction = ActionCreatorFactory()
+const renameUser = createAction<{
+    userId:string,
+    name:string
+}>('user/rename')
+
+const action = renameUser({ userId: 'alice', name: 'alice' })
+/*
+=> {
+  "type": "user/rename",
+  "payload": {
+    "userId": "alice",
+    "name": "alice"
+  }
+}
+*/
+```
+
