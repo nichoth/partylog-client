@@ -23,10 +23,12 @@ const myAction = renameUser({ userId: 'alice', name: 'alice' })
 ```
 
 ```js
+// myAction
 {
-    "type": "user/rename",
-    "payload": {
-        "foo": "bar"
+    type: 'user/rename',
+    payload: {
+        name: 'alice',
+        id: 'alice'
     }
 }
 ```
@@ -61,7 +63,7 @@ class IndexedStore {
     adding:Record<string, boolean>
     db:Promise<IDBDatabase>
 
-constructor (name = 'logparty')
+    constructor (name = 'logparty')
 ```
 
 ```ts
@@ -83,7 +85,9 @@ async add (
 ):Promise<MetaData|null>
 ```
 
-Add things to the store. This uses IndexedDB because it's for browsers.
+Add things to the store. This uses IndexedDB, because it's for browsers.
+
+All the metadata is generated automatically.
 
 If the ID already exists, the operation will fail, in which case `null` will
 be returned. (It's not really possible to have an ID conflict though. The IDs
