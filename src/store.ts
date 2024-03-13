@@ -108,9 +108,9 @@ export interface Entry {
 }
 
 export class IndexedStore {
-    name:string
-    adding:Record<string, boolean>
-    db:Promise<IDBDatabase>
+    readonly name:string
+    readonly adding:Record<string, boolean>
+    readonly db:Promise<IDBDatabase>
 
     constructor (name = 'logparty') {
         this.name = name
