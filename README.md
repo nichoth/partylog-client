@@ -1,5 +1,6 @@
 # partylog client
 ![tests](https://github.com/bicycle-codes/partylog-client/actions/workflows/nodejs.yml/badge.svg)
+[![semantic versioning](https://img.shields.io/badge/semver-2.0.0-blue?logo=semver&style=flat-square)](https://semver.org/)
 [![module](https://img.shields.io/badge/module-ESM%2FCJS-blue?style=flat-square)](README.md)
 
 Client-side log store
