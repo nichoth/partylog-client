@@ -7,7 +7,7 @@ export type Meta = null|{ [key:string]:any };
 
 export interface Action<T = void> {
     type:string;
-    payload?:T;
+    data?:T;
     error?:boolean;
     meta?:Meta;
 }
@@ -115,7 +115,7 @@ export function ActionCreatorFactory (
             (payload:Payload, meta?:Meta) => {
                 const action:Action<Payload> = {
                     type: fullType,
-                    payload,
+                    data: payload,
                 }
 
                 if (commonMeta || meta) {

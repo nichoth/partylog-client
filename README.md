@@ -31,7 +31,7 @@ const myAction = renameUser({ userId: 'alice', name: 'alice' })
 // myAction
 {
     type: 'user/rename',
-    payload: {
+    data: {
         name: 'alice',
         id: 'alice'
     }
@@ -143,7 +143,7 @@ test('ActionCreator', t => {
 
     t.deepEqual(action, {
         type: 'user/rename',
-        payload: {
+        data: {
             name: 'alice',
             id: 'alice'
         }

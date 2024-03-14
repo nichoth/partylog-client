@@ -43,7 +43,7 @@ test('action creating', t => {
 
     t.deepEqual(action, {
         type: 'user/rename',
-        payload: {
+        data: {
             name: 'alice',
             userId: 'alice'
         }
@@ -59,7 +59,7 @@ test('ActionCreator', t => {
 
     t.deepEqual(action, {
         type: 'user/rename',
-        payload: {
+        data: {
             name: 'alice',
             id: 'alice'
         }
