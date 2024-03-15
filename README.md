@@ -38,7 +38,7 @@ class IndexedStore {
     readonly adding:Record<string, boolean>
     readonly db:Promise<IDBDatabase>
 
-    constructor (name = 'logparty')
+    constructor (name = 'partylog')
 ```
 
 ```ts
@@ -48,7 +48,7 @@ import { IndexedStore } from '@bicycle-codes/partylog-client/store'
 test('IndexedStore', t => {
     store = new IndexedStore()
     t.ok(store, 'should create a store')
-    t.equal(store.name, 'logparty', 'should have the default store name')
+    t.equal(store.name, 'partylog', 'should have the default store name')
 })
 ```
 
@@ -151,10 +151,9 @@ Metadata looks like this:
 ```js
 // metadata
 interface MetaData {
-    seq:number
-    id:string
-    reasons:string[]
-    subprotocol?:string
-    time:number
+    seq:number;
+    id:string;
+    time:number;
+    author:
 }
 ```

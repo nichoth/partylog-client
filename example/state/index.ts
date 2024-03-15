@@ -82,13 +82,8 @@ export function State ():{
     }
 
     /**
-     * @NOTE
-     * @See [Sending Actions to Another Browser Tab](https://logux.org/guide/concepts/action/#sending-actions-to-another-browser-tab)
-     * > `client.log.type(type, fn)` and `client.log.on('add', fn)` will not see
-     * > cross-tab actions. You must set listeners by `client.on(type, fn)` and
-     * > `client.on('add', fn)`.
+     * Here we process the actions
      */
-
     client.on('add', (action) => {
         debug('got "add" event', action)
 

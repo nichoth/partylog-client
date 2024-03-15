@@ -1,7 +1,7 @@
 // import { actionEvents, LoguxError } from '@logux/core'
 import { nanoid } from 'nanoid'
 import { PartySocket } from 'partysocket'
-
+import { createNanoEvents } from 'nanoevents'
 import { IndexedStore, MetaData } from './store.js'
 import { Action } from './actions.js'
 import Debug from '@nichoth/debug'
@@ -75,6 +75,7 @@ export class CrossTabClient {
     isLocalStorage:boolean = true
     initialized:boolean = false
     state:NodeState = 'disconnected'
+    emitter:ReturnType<typeof createNanoEvents> = createNanoEvents()
     leaderState?:string
     lastAddedCache:number = 0  // latest `seq` number
     lastReceived:number = 0
@@ -100,6 +101,17 @@ export class CrossTabClient {
             startClosed: true,
             query: { token: opts.token }
         })
+
+        /**
+         * __The Web Locks API__
+         * > one or more scripts pass a promise to navigator.locks.request()
+         * > to request a lock.
+         *
+         * > Once the lock is acquired, the promise is executed
+         *
+         * > when the promise resolves, the lock is released and can be acquired
+         * > by another request.
+         */
 
         if (
             typeof navigator === 'undefined' ||
@@ -143,6 +155,10 @@ export class CrossTabClient {
         this.initializing = this.initialize()
     }
 
+    on (ev:'add', listener) {
+        this.emitter.on(ev, listener)
+    }
+
     async initialize ():Promise<void> {
         const [synced, added] = await Promise.all([
             this.store.getLastSynced(),
@@ -167,6 +183,9 @@ export class CrossTabClient {
         }
     }
 
+    /**
+     * Send a sync event
+     */
     async syncEvent (
         action:Action,
         meta:MetaData
@@ -191,7 +210,9 @@ export class CrossTabClient {
 
     /**
      * @NOTE
-     * The 'sync' message type
+     * The 'sync' message type.
+     * Send a message ['sync', seq, ...data]
+     * Where data is everything that the server doesn't have
      */
     sendSync (seq:number, entries:[Action, MetaData][]) {
         debug('sending sync...', entries)
@@ -240,11 +261,14 @@ export class CrossTabClient {
             return null
         }
 
-        const addedMeta = await this.store.add(action, meta)
+        this.emitter.emit('add', [action, meta])
 
+        /**
+         * @FIXME
+         * The state sync should make sense.
+         */
         this.syncEvent(action, meta)
-
-        return addedMeta
+        return meta
     }
 
     /**
@@ -282,7 +306,7 @@ export class CrossTabClient {
                     // extends BaseNode
                     if (this.role === 'leader') {
                         // add to the local log
-                        this.add(action, meta)
+                        this.add(action)
                     }  // else, need to update the log store
                 }
             } else if (ev.key === storageKey(this, 'state')) {
@@ -316,76 +340,7 @@ export class CrossTabClient {
             localStorage.removeItem(storageKey(this, 'client'))
         }
     }
-
-    getClientId () {
-        return nanoid(8)
-    }
 }
-
-// on storage event in client
-
-/*
-window.addEventListener('storage', e => this.onStorage(e))
-*/
-
-/*
- onStorage(e) {
-    if (e.newValue === null) return
-
-    let data
-    if (e.key === storageKey(this, 'add')) {
-      data = JSON.parse(e.newValue)
-      if (data[0] !== this.tabId) {
-        let action = data[1]
-        let meta = data[2]
-        if (!meta.tab || meta.tab === this.tabId) {
-          if (isMemory(this.log.store)) {
-            this.log.store.add(action, meta)
-          }
-          actionEvents(this.emitter, 'add', action, meta)
-          if (this.role === 'leader') {
-            this.node.onAdd(action, meta)
-          }
-        }
-      }
-    } else if (e.key === storageKey(this, 'state')) {
-      let state = JSON.parse(localStorage.getItem(e.key))
-      if (this.leaderState !== state) {
-        this.leaderState = state
-        this.emitter.emit('state')
-      }
-    } else if (e.key === storageKey(this, 'user')) {
-      data = JSON.parse(e.newValue)
-      if (data[0] !== this.tabId) {
-        this.emitter.emit('user', data[1])
-      }
-    } else if (e.key === storageKey(this, 'subprotocol')) {
-      let other = JSON.parse(e.newValue)
-      let compare = compareSubprotocols(this.options.subprotocol, other)
-      if (compare === 1) {
-        sendToTabs(this, 'subprotocol', this.options.subprotocol)
-      } else if (compare === -1) {
-        let err = new LoguxError(
-          'wrong-subprotocol',
-          { supported: other, used: this.options.subprotocol },
-          true
-        )
-        this.node.emitter.emit('error', err)
-      }
-    }
-  }
-*/
-
-/**
- * __The Web Locks API__
- * > one or more scripts pass a promise to navigator.locks.request() to request
- * > a lock.
- *
- * > Once the lock is acquired, the promise is executed
- *
- * > when the promise resolves, the lock is released and can be acquired by
- * > another request.
- */
 
 function storageKey (
     client:InstanceType<typeof CrossTabClient>,

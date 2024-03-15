@@ -3,14 +3,13 @@ import { toString } from 'uint8arrays'
 import stringify from 'json-canon'
 import { blake3 } from '@noble/hashes/blake3'
 import ts from 'monotonic-timestamp'
+import { BrowserLevel } from 'browser-level'
 import { Action } from './actions.js'
 const debug = createDebug()
 
 const VERSION = 1
 
 debug('version', VERSION)
-
-export type ID = string
 
 export interface MetaData {
     /**
@@ -21,18 +20,17 @@ export interface MetaData {
     /**
      * Action unique ID. Log sets it automatically.
      */
-    id:ID
+    id:string
 
     /**
-     * Why action should be kept in the log.
-     * Actions without reasons will be removed.
+     * Public key used to sign this
      */
-    reasons:string[]
+    author:`did:key:z${string}`
 
     /**
-     * Set code as reason and remove this reasons from previous actions.
+     * signature, base64 encoded
      */
-    subprotocol?:string
+    signature:string,
 
     /**
      * Action created time in current node time. Milliseconds since UNIX epoch.
@@ -63,7 +61,7 @@ export interface Criteria {
     /**
      * Remove reason only for action with `id`.
      */
-    id?:ID
+    id?:string
 
     /**
      * Remove reason only for actions with lower `added`.
@@ -92,12 +90,11 @@ export interface Entry<T=void> {
     created:string;
     id:string;
     meta:MetaData;
-    reasons:string[];
     time:number;
 }
 
 /**
- * A log store that uses IndexedDB.
+ * A log store for IndexedDB.
  * @see https://logux.org/web-api/#indexedstore
  */
 export class IndexedStore {
@@ -105,10 +102,13 @@ export class IndexedStore {
     // a map from timestamp to boolean
     readonly adding:Record<string, boolean>
     readonly db:Promise<IDBDatabase>
+    readonly level:InstanceType<typeof BrowserLevel>
 
     constructor (name = 'partylog') {
         this.name = name
         this.adding = {}
+
+        this.level = new BrowserLevel('log')
 
         this.db = new Promise((resolve, reject) => {
             const req = indexedDB.open(this.name, VERSION)
@@ -127,9 +127,9 @@ export class IndexedStore {
                     })
                     log.createIndex('id', 'id', { unique: true })
                     log.createIndex('created', 'created', { unique: true })
-                    log.createIndex('reasons', 'reasons', { multiEntry: true })
                     db.createObjectStore('extra', { keyPath: 'key' })
                 }
+
                 if (ev.oldVersion < 2) {
                     if (!log!) {
                         log = req.transaction!.objectStore('log')
@@ -174,15 +174,16 @@ export class IndexedStore {
             seq,
             reasons: meta.reasons || [],
             subprotocol: meta.subprotocol,
-            time: created
+            time: created,
+            signature: '123'
         })), 'base64urlpad')
 
         const newMetadata:MetaData = {
             id: newID,
             seq,
-            reasons: meta.reasons || [],
-            subprotocol: meta.subprotocol,
-            time: created
+            time: created,
+            author: 'did:key:z123',
+            signature: '123'
         }
 
         const entry:Entry<T> = {
@@ -190,7 +191,6 @@ export class IndexedStore {
             created: '' + created,
             meta: newMetadata,
             seq,
-            reasons: newMetadata.reasons,
             time: created,
             id: newID,
         }
@@ -241,8 +241,7 @@ export class IndexedStore {
         )
         if (!entry) return false
 
-        for (const key in diff) entry.meta[key] = diff[key]
-        if (diff.reasons) entry.reasons = diff.reasons;
+        for (const key in diff) entry.meta[key] = diff[key];
         (await this.os('log', 'write')).put(entry)
         return true
     }
@@ -353,82 +352,82 @@ export class IndexedStore {
         return [entry.action, entry.meta]
     }
 
-    /**
-     * Remove the given reason, and remove the action if its reasons is empty.
-     * @param reason The reason to remove.
-     * @param criteria Criteria to use to query
-     * @param cb Callback when done.
-     */
-    async removeReason (
-        reason:string,
-        criteria:Criteria,
-        cb:ReadonlyListener<Action, MetaData>
-    ):Promise<void> {
-        if (criteria.id) {
-            const entry = await promisify<Entry>(
-                (await this.os('log')).index('id').get(criteria.id)
-            )
+    // /**
+    //  * Remove the given reason, and remove the action if its reasons is empty.
+    //  * @param reason The reason to remove.
+    //  * @param criteria Criteria to use to query
+    //  * @param cb Callback when done.
+    //  */
+    // async removeReason (
+    //     reason:string,
+    //     criteria:Criteria,
+    //     cb:ReadonlyListener<Action, MetaData>
+    // ):Promise<void> {
+    //     if (criteria.id) {
+    //         const entry = await promisify<Entry>(
+    //             (await this.os('log')).index('id').get(criteria.id)
+    //         )
 
-            if (entry) {
-                const index = entry.meta.reasons.indexOf(reason)
-                if (index !== -1) {
-                    entry.meta.reasons.splice(index, 1)
-                    entry.reasons = entry.meta.reasons
-                    if (entry.meta.reasons.length === 0) {
-                        cb(entry.action, entry.meta)
-                        await (await this.os('log', 'write')).delete!(entry.seq)
-                    } else {
-                        await (await this.os('log', 'write')).put!(entry)
-                    }
-                }
-            }
-        } else {
-            const log = await this.os('log', 'write')
-            const request = log.index('reasons').openCursor(reason)
-            await new Promise((resolve, reject) => {
-                request.onsuccess = (ev) => {
-                    // @ts-expect-error Why TS failing?
-                    if (!ev.target!.result) return resolve()
-                    const entry = request.result!.value
-                    const m = entry.meta
-                    const c = criteria
+    //         if (entry) {
+    //             const index = entry.meta.reasons.indexOf(reason)
+    //             if (index !== -1) {
+    //                 entry.meta.reasons.splice(index, 1)
+    //                 entry.reasons = entry.meta.reasons
+    //                 if (entry.meta.reasons.length === 0) {
+    //                     cb(entry.action, entry.meta)
+    //                     await (await this.os('log', 'write')).delete!(entry.seq)
+    //                 } else {
+    //                     await (await this.os('log', 'write')).put!(entry)
+    //                 }
+    //             }
+    //         }
+    //     } else {
+    //         const log = await this.os('log', 'write')
+    //         const request = log.index('reasons').openCursor(reason)
+    //         await new Promise((resolve, reject) => {
+    //             request.onsuccess = (ev) => {
+    //                 // @ts-expect-error Why TS failing?
+    //                 if (!ev.target!.result) return resolve()
+    //                 const entry = request.result!.value
+    //                 const m = entry.meta
+    //                 const c = criteria
 
-                    if (isDefined(c.olderThan) && !isFirstOlder(m, c.olderThan!)) {
-                        request.result?.continue()
-                    }
-                    if (
-                        isDefined(c.youngerThan) &&
-                        !isFirstOlder(c.youngerThan!, m)
-                    ) {
-                        request.result?.continue()
-                        return
-                    }
-                    if (isDefined(c.minAdded) && entry.added < c.minAdded!) {
-                        request.result?.continue()
-                        return
-                    }
-                    if (isDefined(c.maxAdded) && entry.added > c.maxAdded!) {
-                        request.result?.continue()
-                    }
+    //                 if (isDefined(c.olderThan) && !isFirstOlder(m, c.olderThan!)) {
+    //                     request.result?.continue()
+    //                 }
+    //                 if (
+    //                     isDefined(c.youngerThan) &&
+    //                     !isFirstOlder(c.youngerThan!, m)
+    //                 ) {
+    //                     request.result?.continue()
+    //                     return
+    //                 }
+    //                 if (isDefined(c.minAdded) && entry.added < c.minAdded!) {
+    //                     request.result?.continue()
+    //                     return
+    //                 }
+    //                 if (isDefined(c.maxAdded) && entry.added > c.maxAdded!) {
+    //                     request.result?.continue()
+    //                 }
 
-                    entry.reasons = entry.reasons.filter(i => i !== reason)
-                    entry.meta.reasons = entry.reasons
+    //                 entry.reasons = entry.reasons.filter(i => i !== reason)
+    //                 entry.meta.reasons = entry.reasons
 
-                    let process:IDBRequest
-                    if (entry.reasons.length === 0) {
-                        entry.meta.added = entry.added
-                        cb(entry.action, entry.meta)
-                        process = log.delete(entry.added)
-                    } else {
-                        process = log.put(entry)
-                    }
+    //                 let process:IDBRequest
+    //                 if (entry.reasons.length === 0) {
+    //                     entry.meta.added = entry.added
+    //                     cb(entry.action, entry.meta)
+    //                     process = log.delete(entry.added)
+    //                 } else {
+    //                     process = log.put(entry)
+    //                 }
 
-                    process.onerror = err => reject(err)
-                    process.onsuccess = () => process.result.continue()
-                }
-            })
-        }
-    }
+    //                 process.onerror = err => reject(err)
+    //                 process.onsuccess = () => process.result.continue()
+    //             }
+    //         })
+    //     }
+    // }
 
     /**
      * Set the last synced values.
@@ -456,9 +455,9 @@ export class IndexedStore {
     }
 }
 
-function isDefined (value:any) {
-    return typeof value !== 'undefined'
-}
+// function isDefined (value:any) {
+//     return typeof value !== 'undefined'
+// }
 
 /**
  * Take an indexed DB request, and reject the promise on error.
