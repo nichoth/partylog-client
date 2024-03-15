@@ -4,7 +4,7 @@ export interface Action<T = void> {
     type:string;
     data?:T;
     error?:boolean;
-    meta?:Meta;
+    meta:Meta;
 }
 
 export interface ActionCreator<Payload> {
@@ -108,7 +108,7 @@ export function ActionCreatorFactory (
 
         return Object.assign(
             (payload:Payload, meta?:Meta) => {
-                const action:Action<Payload> = {
+                const action:Partial<Action<Payload>> = {
                     type: fullType,
                     data: payload,
                 }
@@ -121,7 +121,7 @@ export function ActionCreatorFactory (
                     action.error = true
                 }
 
-                return action
+                return (action as Action<Payload>)
             },
             {
                 type: fullType,

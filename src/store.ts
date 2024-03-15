@@ -13,29 +13,43 @@ debug('version', VERSION)
 
 export interface MetaData {
     /**
-     * Sequence number of action in current log. Log fills it.
+     * This is the primary key. It is:
+     *      time + deviceName + local seq integer
+     *
+     * Note this is sorted correctly for multi-device updates, and
+     * guaranteed to by unique.
      */
-    seq:number
+    seq:string;
+
+    /**
+     * The sequence number
+     */
+    localSeq:number;
+
+    /**
+     * Hash of the previous message (need this for sync)
+     */
+    prev:string;
 
     /**
      * Action unique ID. Log sets it automatically.
      */
-    id:string
+    id:string;
 
     /**
      * Public key used to sign this
      */
-    author:`did:key:z${string}`
+    author:`did:key:z${string}`;
 
     /**
      * signature, base64 encoded
      */
-    signature:string,
+    signature:string;
 
     /**
      * Action created time in current node time. Milliseconds since UNIX epoch.
      */
-    time:number
+    time:number;
 }
 
 export interface LogPage<T> {
@@ -84,10 +98,13 @@ export interface Criteria {
     youngerThan?:MetaData
 }
 
+/**
+ * IndexedDB indexed can only be 1 level deep;
+ * that's why we have duplicate keys on the top level & metadata
+ */
 export interface Entry<T=void> {
-    seq:number;
+    seq:string;
     action:Action<T>;
-    created:string;
     id:string;
     meta:MetaData;
     time:number;
@@ -99,15 +116,19 @@ export interface Entry<T=void> {
  */
 export class IndexedStore {
     readonly name:string
+    readonly deviceName:string
     // a map from timestamp to boolean
     readonly adding:Record<string, boolean>
     readonly db:Promise<IDBDatabase>
     readonly level:InstanceType<typeof BrowserLevel>
 
-    constructor (name = 'partylog') {
+    constructor (opts:{ deviceName:string }, name = 'partylog') {
         this.name = name
+        this.deviceName = opts.deviceName
         this.adding = {}
 
+        // HERE -- what is the name passed to BrowserLevel?
+        // is this like the `name` passed to the objectStore method of IDB?
         this.level = new BrowserLevel('log')
 
         this.db = new Promise((resolve, reject) => {
@@ -116,25 +137,31 @@ export class IndexedStore {
 
             req.onsuccess = () => resolve(req.result)
 
+            /**
+             * This handler fires when a new database is created and indicates
+             * either that one has not been created before, or a new version
+             * was submitted with window.indexedDB.open()
+             * @see https://developer.mozilla.org/en-US/docs/Web/API/IDBObjectStore/createIndex#examples
+             */
             req.onupgradeneeded = function (ev) {
                 const db = req.result
 
                 let log:IDBObjectStore
                 if (ev.oldVersion < 1) {
                     log = db.createObjectStore('log', {
-                        autoIncrement: true,
-                        keyPath: 'seq'
+                        // autoIncrement: true,
+                        autoIncrement: false,
+                        keyPath: 'id'
                     })
-                    log.createIndex('id', 'id', { unique: true })
-                    log.createIndex('created', 'created', { unique: true })
-                    db.createObjectStore('extra', { keyPath: 'key' })
-                }
 
-                if (ev.oldVersion < 2) {
-                    if (!log!) {
-                        log = req.transaction!.objectStore('log')
-                    }
-                    log.createIndex('indexes', 'indexes', { multiEntry: true })
+                    // the hash of the metadata
+                    log.createIndex('id', 'id', { unique: true })
+                    log.createIndex('localSeq', 'localSeq', { unique: true })
+                    log.createIndex('seq', 'seq', { unique: true })
+                    // if the server gets 2 actions created at the same time
+                    // by different devices
+                    log.createIndex('time', 'time', { unique: false })
+                    db.createObjectStore('extra', { keyPath: 'key' })
                 }
             }
         })
@@ -160,55 +187,55 @@ export class IndexedStore {
      * @param {Action} action
      * @param {MetaData} meta
      * @returns {Promise<null|MetaData>} Return `null` if the add operation
-     * failed, eg b/c the given ID already exists. Return `MetaData` otherwise.
+     * failed, eg b/c the given ID already exists, or we are already adding it.
+     * Return `MetaData` otherwise.
      */
     async add<T=void> (
         action:Action<T>,
-        meta:{ reasons?:string[]; subprotocol?:string } = {}
+        prev?:Action<T>
     ):Promise<MetaData|null> {
-        const seq = (await this.getLastAdded() + 1)
+        // Can we cache the `lastAdded` value?
+        const localSeq:number = (await this.getLastAdded() + 1)
         const created:number = ts()
 
-        // take the hash of the metadata
-        const newID = toString(blake3(stringify({
-            seq,
-            reasons: meta.reasons || [],
-            subprotocol: meta.subprotocol,
-            time: created,
-            signature: '123'
-        })), 'base64urlpad')
+        // a seq that sorts correctly
+        // time + deviceName + local seq integer
+        const seq = '' + created + ':' + this.deviceName + ':' + localSeq
 
-        const newMetadata:MetaData = {
-            id: newID,
+        const newMetadata:Omit<MetaData, 'id'> = {
+            prev: prev ? prev.meta!.id : '',
             seq,
+            localSeq,
             time: created,
             author: 'did:key:z123',
             signature: '123'
         }
 
+        // take the hash of the metadata
+        const newID = toString(blake3(stringify(newMetadata)), 'base64urlpad')
+
         const entry:Entry<T> = {
             action,
-            created: '' + created,
-            meta: newMetadata,
             seq,
-            time: created,
             id: newID,
+            time: created,
+            meta: { id: newID, ...newMetadata },
         }
 
-        if (this.adding[entry.created]) {
+        if (this.adding[entry.seq]) {
             return null
         }
-        this.adding[entry.created] = true
+        this.adding[entry.seq] = true
 
         const exist = await promisify(
-            (await this.os('log')).index('id').get(newMetadata.id)
+            (await this.os('log')).index('id').get(entry.id)
         )
 
         if (exist) return null
 
         await (await this.os('log', 'write')).add(entry)
-        delete this.adding[entry.created]
-        return newMetadata
+        delete this.adding[entry.seq]
+        return newMetadata as MetaData
     }
 
     /**
@@ -352,83 +379,6 @@ export class IndexedStore {
         return [entry.action, entry.meta]
     }
 
-    // /**
-    //  * Remove the given reason, and remove the action if its reasons is empty.
-    //  * @param reason The reason to remove.
-    //  * @param criteria Criteria to use to query
-    //  * @param cb Callback when done.
-    //  */
-    // async removeReason (
-    //     reason:string,
-    //     criteria:Criteria,
-    //     cb:ReadonlyListener<Action, MetaData>
-    // ):Promise<void> {
-    //     if (criteria.id) {
-    //         const entry = await promisify<Entry>(
-    //             (await this.os('log')).index('id').get(criteria.id)
-    //         )
-
-    //         if (entry) {
-    //             const index = entry.meta.reasons.indexOf(reason)
-    //             if (index !== -1) {
-    //                 entry.meta.reasons.splice(index, 1)
-    //                 entry.reasons = entry.meta.reasons
-    //                 if (entry.meta.reasons.length === 0) {
-    //                     cb(entry.action, entry.meta)
-    //                     await (await this.os('log', 'write')).delete!(entry.seq)
-    //                 } else {
-    //                     await (await this.os('log', 'write')).put!(entry)
-    //                 }
-    //             }
-    //         }
-    //     } else {
-    //         const log = await this.os('log', 'write')
-    //         const request = log.index('reasons').openCursor(reason)
-    //         await new Promise((resolve, reject) => {
-    //             request.onsuccess = (ev) => {
-    //                 // @ts-expect-error Why TS failing?
-    //                 if (!ev.target!.result) return resolve()
-    //                 const entry = request.result!.value
-    //                 const m = entry.meta
-    //                 const c = criteria
-
-    //                 if (isDefined(c.olderThan) && !isFirstOlder(m, c.olderThan!)) {
-    //                     request.result?.continue()
-    //                 }
-    //                 if (
-    //                     isDefined(c.youngerThan) &&
-    //                     !isFirstOlder(c.youngerThan!, m)
-    //                 ) {
-    //                     request.result?.continue()
-    //                     return
-    //                 }
-    //                 if (isDefined(c.minAdded) && entry.added < c.minAdded!) {
-    //                     request.result?.continue()
-    //                     return
-    //                 }
-    //                 if (isDefined(c.maxAdded) && entry.added > c.maxAdded!) {
-    //                     request.result?.continue()
-    //                 }
-
-    //                 entry.reasons = entry.reasons.filter(i => i !== reason)
-    //                 entry.meta.reasons = entry.reasons
-
-    //                 let process:IDBRequest
-    //                 if (entry.reasons.length === 0) {
-    //                     entry.meta.added = entry.added
-    //                     cb(entry.action, entry.meta)
-    //                     process = log.delete(entry.added)
-    //                 } else {
-    //                     process = log.put(entry)
-    //                 }
-
-    //                 process.onerror = err => reject(err)
-    //                 process.onsuccess = () => process.result.continue()
-    //             }
-    //         })
-    //     }
-    // }
-
     /**
      * Set the last synced values.
      *
@@ -455,22 +405,6 @@ export class IndexedStore {
     }
 }
 
-// function isDefined (value:any) {
-//     return typeof value !== 'undefined'
-// }
-
-/**
- * Take an indexed DB request, and reject the promise on error.
- *
- * @param request Indexed DB request
- * @param reject Reject function to call with error
- */
-function rejectify (request:IDBRequest, reject:(err?)=>void) {
-    request.onerror = () => {
-        reject(request.error)
-    }
-}
-
 /**
  * Compare the time when two log entries were created.
  *
@@ -489,50 +423,10 @@ function rejectify (request:IDBRequest, reject:(err?)=>void) {
  * @param {Partial<MetaData>} secondMeta Other action’s metadata.
  */
 export function isFirstOlder (
-    firstMeta:Partial<MetaData>|string,
-    secondMeta:Partial<MetaData>|string
+    firstMeta:{ time:number },
+    secondMeta:{ time:number }
 ):boolean {
-    if (typeof firstMeta === 'string') {
-        firstMeta = { id: firstMeta, time: parseInt(firstMeta) }
-    }
-    if (typeof secondMeta === 'string') {
-        secondMeta = { id: secondMeta, time: parseInt(secondMeta) }
-    }
-
-    if (firstMeta.time! > secondMeta.time!) {
-        return false
-    } else if (firstMeta.time! < secondMeta.time!) {
-        return true
-    }
-
-    const firstID = firstMeta.id!.split(' ')
-    const secondID = secondMeta.id!.split(' ')
-
-    const firstNode = firstID[1]
-    const secondNode = secondID[1]
-    if (firstNode > secondNode) {
-        return false
-    } else if (firstNode < secondNode) {
-        return true
-    }
-
-    const firstCounter = parseInt(firstID[2])
-    const secondCounter = parseInt(secondID[2])
-    if (firstCounter > secondCounter) {
-        return false
-    } else if (firstCounter < secondCounter) {
-        return true
-    }
-
-    const firstNodeTime = parseInt(firstID[0])
-    const secondNodeTime = parseInt(secondID[0])
-    if (firstNodeTime > secondNodeTime) {
-        return false
-    } else if (firstNodeTime < secondNodeTime) {
-        return true
-    }
-
-    return false
+    return (firstMeta.time < secondMeta.time)
 }
 
 /**
@@ -548,4 +442,16 @@ function promisify<T> (request:IDBRequest<T>) {
             resolve(request.result)
         }
     })
+}
+
+/**
+ * Take an indexed DB request, and reject the promise on error.
+ *
+ * @param request Indexed DB request
+ * @param reject Reject function to call with error
+ */
+function rejectify (request:IDBRequest, reject:(err?)=>void) {
+    request.onerror = () => {
+        reject(request.error)
+    }
 }

@@ -1,4 +1,3 @@
-// import { actionEvents, LoguxError } from '@logux/core'
 import { nanoid } from 'nanoid'
 import { PartySocket } from 'partysocket'
 import { createNanoEvents } from 'nanoevents'
@@ -8,49 +7,12 @@ import Debug from '@nichoth/debug'
 export * as Actions from './actions.js'
 const debug = Debug()
 
-// function compareSubprotocols (left, right) {
-//     const leftParts = left.split('.')
-//     const rightParts = right.split('.')
-//     for (let i = 0; i < 3; i++) {
-//         const leftNumber = parseInt(leftParts[i] || 0)
-//         const rightNumber = parseInt(rightParts[i] || 0)
-//         if (leftNumber > rightNumber) {
-//             return 1
-//         } else if (leftNumber < rightNumber) {
-//             return -1
-//         }
-//     }
-//     return 0
-// }
-
 export type NodeState =
     | 'connected'
     | 'connecting'
     | 'disconnected'
     | 'sending'
     | 'synchronized'
-
-/**
- * Leader tab synchronization state. It can differs from `client.node.state`
- * (because only the leader tab keeps connection).
- *
- * ```js
- * client.on('state', () => {
- *   if (client.state === 'disconnected' && client.state === 'sending') {
- *     showCloseWarning()
- *   }
- * })
- * ```
- */
-function setState (
-    client:InstanceType<typeof CrossTabClient>,
-    state:NodeState
-) {
-    if (client.state !== state) {
-        client.state = state
-        sendToTabs(client, 'state', client.state)
-    }
-}
 
 /**
  * Logux has this in the CrossTabClient
@@ -142,7 +104,7 @@ export class CrossTabClient {
         }
 
         this.userId = opts.userId
-        this.store = new IndexedStore()
+        this.store = new IndexedStore({ deviceName: 'alice' })
 
         /**
          * Listen for storage events
@@ -186,18 +148,18 @@ export class CrossTabClient {
     /**
      * Send a sync event
      */
-    async syncEvent (
-        action:Action,
-        meta:MetaData
-    ) {
-        let seq = meta.seq
-        if (typeof seq === 'undefined') {
-            const lastAdded = this.lastAddedCache
-            seq = (lastAdded > this.lastSent) ? lastAdded : this.lastSent
-        }
+    // async syncEvent (
+    //     action:Action,
+    //     meta:MetaData
+    // ) {
+    //     let seq = meta.seq
+    //     if (typeof seq === 'undefined') {
+    //         const lastAdded = this.lastAddedCache
+    //         seq = (lastAdded > this.lastSent) ? lastAdded : this.lastSent
+    //     }
 
-        this.sendSync(seq, [[action, meta]])
-    }
+    //     this.sendSync(seq, [[action, meta]])
+    // }
 
     /**
      * This does *not* notify other tabs of state change.
@@ -245,15 +207,18 @@ export class CrossTabClient {
      * @param {MetaData} meta Metadata
      * @returns {Promise<void>}
      */
-    async add (action:Action):Promise<MetaData|null> {
+    async add (
+        action:Action,
+        opts:{ sync?:boolean } = {}
+    ):Promise<MetaData|null> {
         const meta = await this.store.add(action)
         if (!meta) {
             // should not ever happen
             throw new Error('That ID already exists')
         }
 
-        if (this.lastAddedCache < meta.seq) {
-            this.lastAddedCache = meta.seq
+        if (this.lastAddedCache < meta.localSeq) {
+            this.lastAddedCache = meta.localSeq
         }
 
         if (this.received && this.received[meta.id]) {
@@ -267,7 +232,14 @@ export class CrossTabClient {
          * @FIXME
          * The state sync should make sense.
          */
-        this.syncEvent(action, meta)
+        // if (opts.sync) {
+        //     this.syncEvent(action, meta)
+        // }
+
+        if (opts.sync) {
+            // do something
+        }
+
         return meta
     }
 
@@ -282,7 +254,7 @@ export class CrossTabClient {
         let data
 
         /**
-         * `add` event
+         * Listen for `add` events from other tabs
          */
         if (ev.key === storageKey(this, 'add')) {
             data = JSON.parse(ev.newValue)
@@ -365,5 +337,27 @@ function sendToTabs (
         client.isLocalStorage = false
         client.role = 'leader'
         client.party.reconnect()
+    }
+}
+
+/**
+ * Leader tab synchronization state. It can differs from `client.node.state`
+ * (because only the leader tab keeps connection).
+ *
+ * ```js
+ * client.on('state', () => {
+ *   if (client.state === 'disconnected' && client.state === 'sending') {
+ *     showCloseWarning()
+ *   }
+ * })
+ * ```
+ */
+function setState (
+    client:InstanceType<typeof CrossTabClient>,
+    state:NodeState
+) {
+    if (client.state !== state) {
+        client.state = state
+        sendToTabs(client, 'state', client.state)
     }
 }
