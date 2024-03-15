@@ -10,13 +10,6 @@ const VERSION = 1
 
 debug('version', VERSION)
 
-// export interface Action {
-//     /**
-//      * Action type name.
-//      */
-//     type: string
-// }
-
 export type ID = string
 
 export interface MetaData {
@@ -105,6 +98,7 @@ export interface Entry<T=void> {
 
 /**
  * A log store that uses IndexedDB.
+ * @see https://logux.org/web-api/#indexedstore
  */
 export class IndexedStore {
     readonly name:string
@@ -314,7 +308,7 @@ export class IndexedStore {
      * @returns {Promise<number>}
      */
     async getLastAdded ():Promise<number> {
-        const cursor = await promisify<IDBCursorWithValue>(
+        const cursor = await promisify<IDBCursorWithValue|null>(
             (await this.os('log')).openCursor(null, 'prev')
         )
 
@@ -340,17 +334,31 @@ export class IndexedStore {
         }
     }
 
-    async remove (id:string) {
+    /**
+     * @TODO -- delete the content, keep the metadata
+     * @TODO -- sync delete actions with the remote store
+     * Remove an action from the local store.
+     * @param {string} id The ID to delete
+     * @returns {Promise<null|[Action, MetaData]>} `null` if the ID does not
+     * exist, the removed action otherwise.
+     */
+    async remove (id:string):Promise<null|[Action, MetaData]> {
         const entry = await promisify<Entry>(
             (await this.os('log')).index('id').get(id)
         )
-        if (!entry) return false;
+        if (!entry) return null;
 
         (await this.os('log', 'write')).delete(entry.seq)
         entry.meta.seq = entry.seq
         return [entry.action, entry.meta]
     }
 
+    /**
+     * Remove the given reason, and remove the action if its reasons is empty.
+     * @param reason The reason to remove.
+     * @param criteria Criteria to use to query
+     * @param cb Callback when done.
+     */
     async removeReason (
         reason:string,
         criteria:Criteria,
@@ -422,7 +430,14 @@ export class IndexedStore {
         }
     }
 
-    async setLastSynced (values:Partial<{ sent:number, received:number }>) {
+    /**
+     * Set the last synced values.
+     *
+     * @param values Sent & received numbers.
+     */
+    async setLastSynced (
+        values:Partial<{ sent:number, received:number }>
+    ):Promise<void> {
         let data:{
             key:'lastSynced',
             received:number,
@@ -445,9 +460,15 @@ function isDefined (value:any) {
     return typeof value !== 'undefined'
 }
 
-function rejectify (request, reject) {
-    request.onerror = e => {
-        reject(e.target.error)
+/**
+ * Take an indexed DB request, and reject the promise on error.
+ *
+ * @param request Indexed DB request
+ * @param reject Reject function to call with error
+ */
+function rejectify (request:IDBRequest, reject:(err?)=>void) {
+    request.onerror = () => {
+        reject(request.error)
     }
 }
 
@@ -515,7 +536,13 @@ export function isFirstOlder (
     return false
 }
 
-function promisify<T> (request:IDBRequest) {
+/**
+ * Take an IDB request, turn it into a promise.
+ *
+ * @param request IDB request
+ * @returns {Promise<IDBRequest['result']>}
+ */
+function promisify<T> (request:IDBRequest<T>) {
     return new Promise<T>((resolve, reject) => {
         rejectify(request, reject)
         request.onsuccess = () => {

@@ -1,5 +1,6 @@
+import { BaseNode } from '../base-node/index.js'
 import {
-    ClientNode,
+    // ClientNode,
     isFirstOlder,
     Log,
     MemoryStore,
@@ -43,16 +44,59 @@ function unsubscribeChannel (client, unsubscribe) {
     }
 }
 
+const DEFAULT_OPTIONS = {
+    fixTime: true,
+    ping: 10000,
+    timeout: 70000
+}
+
+export class ClientNode extends BaseNode {
+    constructor (nodeId, log, connection, options = {}) {
+        super(nodeId, log, connection, {
+            ...options,
+            fixTime: options.fixTime ?? DEFAULT_OPTIONS.fixTime,
+            ping: options.ping ?? DEFAULT_OPTIONS.ping,
+            timeout: options.timeout ?? DEFAULT_OPTIONS.timeout
+        })
+    }
+
+    onConnect () {
+        if (!this.connected) {
+            this.connected = true
+            this.initializing = this.initializing.then(() => {
+                if (this.connected) this.sendConnect()
+            })
+        }
+    }
+}
+
+/**
+ * The cient side node
+ *   - The cross tab functionality should work
+ */
+
 export class Client {
+    options
+    node
+    isLocalStorage
+    nodeId
+    clientId
+    tabId
+    log
+    last
+    subscriptions
+    emitter
+    processing
+    tabTimeout
+    tabPing
+    pinging
+
     constructor (opts = {}) {
         this.options = opts
 
         if (process.env.NODE_ENV !== 'production') {
             if (typeof this.options.server === 'undefined') {
                 throw new Error('Missed server option in Logux client')
-            }
-            if (typeof this.options.subprotocol === 'undefined') {
-                throw new Error('Missed subprotocol option in Logux client')
             }
             if (typeof this.options.userId === 'undefined') {
                 throw new Error(
@@ -333,7 +377,7 @@ export class Client {
         for (const i in localStorage) {
             const prefix = this.options.prefix + ':tab:'
             if (i.slice(0, prefix.length) === prefix) {
-                const time = parseInt(localStorage.getItem(i))
+                const time = parseInt(localStorage.getItem(i)!)
                 if (Date.now() - time > this.tabTimeout) {
                     cleanTabActions(this, i.slice(prefix.length))
                 }

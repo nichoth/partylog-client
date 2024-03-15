@@ -8,48 +8,15 @@ A client-side log store
 The Indexed DB database in the browser *is the source of truth*. The server
 provides backup & state sync amongst multiple devices.
 
+__Featuring__
+
+* Leader election -- If you open multiple tabs to the same address, only a
+  single websocket connection and a single database are creeated.
+
 ## the data format
 
 We use actions and metadata. Actions are event-sourcing style -- something you
 would pass to a `reduce` function.
-
-### Actions
-
-```js
-// action
-import { ActionCreator } from '@bicycle-codes/partylog-client/actions'
-
-const renameUser = ActionCreator<
-    userId:string,
-    name:string
->('user/rename')
-
-const myAction = renameUser({ userId: 'alice', name: 'alice' })
-```
-
-```js
-// myAction
-{
-    type: 'user/rename',
-    data: {
-        name: 'alice',
-        id: 'alice'
-    }
-}
-```
-
-### Metadata
-
-```js
-// metadata
-export interface MetaData {
-    seq:number
-    id:string
-    reasons:string[]
-    subprotocol?:string
-    time:number
-}
-```
 
 ## install
 
@@ -59,6 +26,7 @@ npm i -S @bicycle-codes/partylog-client
 
 ## use
 
+## API
 ### IndexedStore
 
 #### create a new store
@@ -123,6 +91,17 @@ test('add something to the store', async t => {
 ### Actions
 Helpers to create action objects of various types.
 
+Actions are JS objects like this:
+```js
+{
+    type: 'user/rename',
+    data: {
+        name: 'alice',
+        id: 'alice'
+    }
+}
+```
+
 #### ActionCreator
 Create a function that will create actions of a given type.
 
@@ -152,7 +131,7 @@ test('ActionCreator', t => {
 ```
 
 #### match
-The action creator function has a method `match` that will return `true` if a
+The action creator function has a property `match` that will return `true` if a
 given action has a matching `type`.
 
 ```js
@@ -163,4 +142,19 @@ test('action matcher', t => {
     t.equal(renameUser.match({ type: 'testing' }), false,
         'should not match a mismatched action object')
 })
+```
+
+## Metadata
+
+Metadata looks like this:
+
+```js
+// metadata
+interface MetaData {
+    seq:number
+    id:string
+    reasons:string[]
+    subprotocol?:string
+    time:number
+}
 ```

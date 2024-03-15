@@ -1,8 +1,3 @@
-// export interface AnyAction {
-//     [extra:string]:any
-//     type:string;
-// }
-
 export type Meta = null|{ [key:string]:any };
 
 export interface Action<T = void> {
@@ -103,7 +98,7 @@ export function ActionCreatorFactory (
     ) {
         const fullType = base + type
 
-        if (process.env.NODE_ENV !== 'production') {
+        if (!import.meta.env.PROD) {
             if (actionTypes[fullType]) {
                 throw new Error(`Duplicate action type: ${fullType}`)
             }
