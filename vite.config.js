@@ -38,6 +38,11 @@ export default defineConfig({
         minify: false,
         outDir: '../public',
         emptyOutDir: true,
-        sourcemap: 'inline'
+        sourcemap: 'inline',
+        rollupOptions: {
+            external: [
+                'buffer'
+            ]
+        }
     }
 })

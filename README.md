@@ -157,3 +157,24 @@ interface MetaData {
     author:
 }
 ```
+
+## previous message format
+
+```ts
+{
+  metadata: {
+    seq: number,
+    prev: string|null,  // <- hash of previous `metadata`
+    username: string,
+    timestamp: number,
+    proof: string,   // <- a hash of the content
+    signature: string,
+    author: `did:key:z${string}`,  // <- the DID of the author device
+  },
+  content: {
+    text:string,
+    alt:string,
+    mentions:string[]  // <- an array of hashes of blobs in this post
+  }
+}
+```
