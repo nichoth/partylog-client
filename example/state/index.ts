@@ -1,6 +1,6 @@
 import { Signal, signal } from '@preact/signals'
 import { program as createProgram } from '@oddjs/odd'
-import { HeaderFactory } from '@bicycle-codes/request'
+import { TokenFactory } from '@bicycle-codes/request'
 import Route from 'route-event'
 import {
     increment,
@@ -34,8 +34,10 @@ export async function State ():Promise<{
         namespace: { creator: 'test', name: 'testing' },
     })
     const { crypto } = program.components
-    const createHeader = HeaderFactory(crypto)
-    const header = await createHeader()  // read & update `__seq` in localStorage
+    const createToken = TokenFactory(crypto)
+    const token = await createToken()  // read & update `__seq` in localStorage
+
+    debug('Your DID -- ', await program.agentDID())
 
     const client = new CrossTabClient({
         host: import.meta.env.DEV ?
@@ -43,7 +45,7 @@ export async function State ():Promise<{
             'partylog.nichoth.partykit.dev',
         userId: 'anonymous',
         did: 'did:key:z123',
-        token: header
+        token
     })
 
     /**

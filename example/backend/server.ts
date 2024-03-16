@@ -1,8 +1,10 @@
 import fauna from 'faunadb'
 import * as Party from 'partykit/server'
 import { getClient } from './get-client.js'
-import Debug from '@nichoth/debug'
-const debug = Debug()
+import {
+    verifyParsed,
+} from '@bicycle-codes/request'
+import { parseToken } from '@bicycle-codes/request/parse'
 const { query: q, Client } = fauna
 
 /**
@@ -36,11 +38,13 @@ export default class WebSocketServer implements Party.Server {
         try {
             // get token from request query string
             const token = new URL(request.url).searchParams.get('token') ?? ''
-            debug('the token', token)
+            console.log('**the token**', token)
 
-            if (token !== '123') {
-                throw new Error('bad token')
-            }
+            // in real life, we would check the token author's DID,
+            // and verify that they are an allowed user
+            const parsed = parseToken(token)
+            const isOk = await verifyParsed(parsed)
+            if (!isOk) throw new Error('bad token')
 
             return request  // forward the request to `onConnect`
         } catch (err) {

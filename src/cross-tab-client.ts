@@ -14,8 +14,18 @@ export type NodeState =
     | 'sending'
     | 'synchronized'
 
+/**
+ * Client-side, should keep track of the last time we synced, ie,
+ * what was our last synchronized number before we went offline?
+ *
+ * Need some kind of marker in the list of actions. Something that says,
+ * "offline"
+ * and antoher that says
+ * "connected"
+ */
+
 export type SyncMessage =
-    | ['hello', seq:number]
+    | ['hello', { seq:number, id:string }]
 
 /**
  * Logux has this in the CrossTabClient

@@ -149,7 +149,6 @@ export class IndexedStore {
         this.db = new Promise((resolve, reject) => {
             const req = indexedDB.open(this.name, VERSION)
             req.onerror = err => reject(err)
-
             req.onsuccess = () => resolve(req.result)
 
             /**
@@ -166,13 +165,14 @@ export class IndexedStore {
                     log = db.createObjectStore('log', {
                         // autoIncrement: true,
                         autoIncrement: false,
-                        keyPath: 'id'
+                        keyPath: 'seq'
                     })
 
                     // the hash of the metadata
                     log.createIndex('id', 'id', { unique: true })
                     log.createIndex('localSeq', 'localSeq', { unique: true })
                     log.createIndex('seq', 'seq', { unique: true })
+                    log.createIndex('type', 'type', { unique: false })
                     // if the server gets 2 actions created at the same time
                     // by different devices
                     log.createIndex('time', 'time', { unique: false })
@@ -180,6 +180,15 @@ export class IndexedStore {
                 }
             }
         })
+    }
+
+    async getRecordsSinceOffline () {
+        const os = await this.os('log')
+        const index = os.index('type')
+        const cursor = await promisify<IDBCursorWithValue|null>(
+            index.openCursor('offline', 'prev')
+        )
+        cursor?.value
     }
 
     /**
@@ -246,7 +255,13 @@ export class IndexedStore {
             })
         }
 
-        // take the hash of the metadata
+        /**
+         * @TODO
+         * Need to sedd the new entry to the websocket server, after
+         * adding it to our local DB.
+         *   - should delete the `localSeq` from the metadata and entry,
+         *     probably server-side
+         */
 
         const entry:Entry<T> = {
             action,
@@ -257,11 +272,12 @@ export class IndexedStore {
             meta: newMetadata as MetaData
         }
 
-        if (this.adding[entry.seq]) {
+        if (this.adding[entry.localSeq]) {
             return null
         }
-        this.adding[entry.seq] = true
+        this.adding[entry.localSeq] = true
 
+        // this will not happen
         const exist = await promisify(
             (await this.os('log')).index('id').get(entry.id)
         )
@@ -269,7 +285,8 @@ export class IndexedStore {
         if (exist) return null
 
         await (await this.os('log', 'write')).add(entry)
-        delete this.adding[entry.seq]
+        delete this.adding[entry.localSeq]
+        // here -- should send to server
         return newMetadata as MetaData
     }
 
@@ -319,8 +336,8 @@ export class IndexedStore {
 
     /**
      * Return a Promise with the first page. The Page object has a property
-     * `entries` property with part of results and `next` property with a
-     * function to load the * next page. If it was the last page, `next`
+     * `entries` with part of the results, and a `next` property with a
+     * function to load the next page. If this was the last page, `next`
      * property should be empty.
      *
      * We need a pagination API because the log could be very big.
@@ -330,32 +347,36 @@ export class IndexedStore {
      */
     async get<T=void> ({ index, order }:{
         index:string;
-        order?:'created'
+        order?:'time'
     }):Promise<LogPage<T>> {
         return new Promise((resolve, reject) => {
             this.os('log').then(log => {
-                let request
+                let request:IDBRequest<IDBCursorWithValue|null>
                 if (index) {
-                    if (order === 'created') {
-                        request = log.index('created')
+                    if (order === 'time') {
+                        // index and order === time
+                        request = log.index('time').openCursor(null, 'prev')
                     } else {
+                        // index, order !== time
                         const keyRange = IDBKeyRange.only(index)
                         request = log.index('indexes').openCursor(keyRange, 'prev')
                     }
-                } else if (order === 'created') {
-                    request = log.index('created').openCursor(null, 'prev')
+                } else if (order === 'time') {
+                    // not index, but order === time
+                    request = log.index('time').openCursor(null, 'prev')
                 } else {
+                    // not index, and order !== time
                     request = log.openCursor(null, 'prev')
                 }
 
                 request.onerror = (err) => { reject(err) }
 
                 const entries:[Action<T>, MetaData][] = []
-                request.onsuccess = (ev) => {
-                    const cursor = ev.target.result
+                request.onsuccess = () => {
+                    const cursor = request.result
                     if (!cursor) return resolve({ entries })
                     if (!index || cursor.value.indexes.includes(index)) {
-                        cursor.value.meta.added = cursor.value.added
+                        cursor.value.meta.seq = cursor.value.seq
                         entries.unshift([cursor.value.action, cursor.value.meta])
                     }
                     cursor.continue()
