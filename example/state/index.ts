@@ -1,4 +1,6 @@
 import { Signal, signal } from '@preact/signals'
+import { program as createProgram } from '@oddjs/odd'
+import { HeaderFactory } from '@bicycle-codes/request'
 import Route from 'route-event'
 import {
     increment,
@@ -20,21 +22,28 @@ const debug = Debug()
  *   - routes
  *   - logux subscription
  */
-export function State ():{
+export async function State ():Promise<{
     route:Signal<string>;
     count:Signal<number>;
     username:Signal<string|null>;
     _client:InstanceType<typeof CrossTabClient>
     _setRoute:(path:string)=>void;
-} {  // eslint-disable-line indent
+}> {  // eslint-disable-line indent
     const onRoute = Route()
+    const program = await createProgram({
+        namespace: { creator: 'test', name: 'testing' },
+    })
+    const { crypto } = program.components
+    const createHeader = HeaderFactory(crypto)
+    const header = await createHeader()  // read & update `__seq` in localStorage
 
     const client = new CrossTabClient({
         host: import.meta.env.DEV ?
             'localhost:1999' :  // local partykit server
-            'logux-party.nichoth.partykit.dev',
+            'partylog.nichoth.partykit.dev',
         userId: 'anonymous',
-        token: '123'
+        did: 'did:key:z123',
+        token: header
     })
 
     /**
@@ -129,7 +138,7 @@ export function State ():{
     return state
 }
 
-State.Increase = async function (state:ReturnType<typeof State>) {
+State.Increase = async function (state:Awaited<ReturnType<typeof State>>) {
     const inc = increment()
     debug('increment action', inc)
     // const meta = await state._client.log.add(inc, { sync: true })
@@ -137,7 +146,7 @@ State.Increase = async function (state:ReturnType<typeof State>) {
     debug('the increment meta', meta)
 }
 
-State.Decrease = async function (state:ReturnType<typeof State>) {
+State.Decrease = async function (state:Awaited<ReturnType<typeof State>>) {
     const dec = decrement()
     debug('decrement action', dec)
     state._client.add(dec, { sync: true })

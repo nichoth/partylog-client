@@ -1,0 +1,6 @@
+{
+  "$schema": "https://www.partykit.io/schema.json",
+  "name": "partylog",
+  "main": "example/backend/server.ts",
+  "compatibilityDate": "2024-03-03"
+}

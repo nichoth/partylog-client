@@ -14,6 +14,9 @@ export type NodeState =
     | 'sending'
     | 'synchronized'
 
+export type SyncMessage =
+    | ['hello', seq:number]
+
 /**
  * Logux has this in the CrossTabClient
  *
@@ -40,7 +43,7 @@ export class CrossTabClient {
     state:NodeState = 'disconnected'
     emitter:ReturnType<typeof createNanoEvents> = createNanoEvents()
     leaderState?:string
-    lastAddedCache:number = 0  // latest `seq` number
+    lastAddedCache:number = -1  // latest `seq` number
     lastReceived:number = 0
     received:object = {}
     lastSent:number = 0
@@ -61,6 +64,7 @@ export class CrossTabClient {
     }) {
         this.did = opts.did
         this.party = new PartySocket({
+            party: 'main',
             host: opts.host,
             startClosed: true,
             query: { token: opts.token }
@@ -103,8 +107,19 @@ export class CrossTabClient {
             setState(this, 'disconnected')
         }
 
-        this.party.onopen = () => {
+        this.party.onopen = async () => {
             setState(this, 'connected')
+            /**
+             * @TODO
+             * should do a sync protocol in here
+             */
+            await this.initializing
+            const msg:SyncMessage = ['hello', this.lastAddedCache]
+            this.party.send(JSON.stringify(msg))
+        }
+
+        this.party.onmessage = (ev) => {
+            debug('on message', JSON.parse(ev.data))
         }
 
         this.userId = opts.userId
@@ -235,6 +250,8 @@ export class CrossTabClient {
 
         this.emitter.emit('add', [action, meta])
 
+        sendToTabs(this, 'add', [action, meta])
+
         /**
          * @FIXME
          * The state sync should make sense.
@@ -332,9 +349,19 @@ function storageKey (
     return client.prefix + ':' + client.userId + ':' + name
 }
 
+/**
+ * Tell the other tabs that something happened.
+ *
+ * @param client The client instance
+ * @param event Either 'state', which means a change internal client state, eg,
+ * connecting, synchronized, etc, or 'add', which means we just added a new
+ * entry to the log.
+ * @param data The event data
+ * @returns {void}
+ */
 function sendToTabs (
     client:InstanceType<typeof CrossTabClient>,
-    event:string,
+    event:'state'|'add',
     data:any
 ):void {
     if (!client.isLocalStorage) return
