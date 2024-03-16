@@ -34,6 +34,7 @@ export type NodeState =
  */
 export class CrossTabClient {
     role:'follower'|'leader' = 'follower'
+    did:`did:key:z${string}`
     isLocalStorage:boolean = true
     initialized:boolean = false
     state:NodeState = 'disconnected'
@@ -54,12 +55,13 @@ export class CrossTabClient {
 
     constructor (opts:{
         host:string;
+        did:`did:key:z${string}`;
         userId:string;
         token:string;
     }) {
+        this.did = opts.did
         this.party = new PartySocket({
             host: opts.host,
-            // start websocket in CLOSED state; call `.reconnect()` to connect
             startClosed: true,
             query: { token: opts.token }
         })
@@ -73,6 +75,8 @@ export class CrossTabClient {
          *
          * > when the promise resolves, the lock is released and can be acquired
          * > by another request.
+         *
+         * @see https://greenvitriol.com/posts/browser-leader
          */
 
         if (
@@ -104,7 +108,10 @@ export class CrossTabClient {
         }
 
         this.userId = opts.userId
-        this.store = new IndexedStore({ deviceName: 'alice' })
+        this.store = new IndexedStore({
+            deviceName: 'alice',
+            did: 'did:key:z123'
+        })
 
         /**
          * Listen for storage events
@@ -231,13 +238,17 @@ export class CrossTabClient {
         /**
          * @FIXME
          * The state sync should make sense.
+         * Need to write a sync protocol.
          */
+
         // if (opts.sync) {
         //     this.syncEvent(action, meta)
         // }
 
         if (opts.sync) {
             // do something
+            // need to send the event to the server
+            // need to tell the other tabs about this event
         }
 
         return meta

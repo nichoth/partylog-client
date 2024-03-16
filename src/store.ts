@@ -14,9 +14,9 @@ debug('version', VERSION)
 export interface MetaData {
     /**
      * This is the primary key. It is:
-     *      time + deviceName + local seq integer
+     *      time + ':' + localSeq + ':' + this.deviceName
      *
-     * Note this is sorted correctly for multi-device updates, and
+     * NOTE -- this is sorted correctly for multi-device updates, and
      * guaranteed to by unique.
      */
     seq:string;
@@ -32,7 +32,7 @@ export interface MetaData {
     prev:string;
 
     /**
-     * Action unique ID. Log sets it automatically.
+     * Action unique ID (the hash of the metadata)
      */
     id:string;
 
@@ -42,14 +42,13 @@ export interface MetaData {
     author:`did:key:z${string}`;
 
     /**
-     * signature, base64 encoded
-     */
-    signature:string;
-
-    /**
      * Action created time in current node time. Milliseconds since UNIX epoch.
      */
     time:number;
+}
+
+export interface SignedMetaData extends MetaData {
+    signature:string
 }
 
 export interface LogPage<T> {
@@ -104,15 +103,19 @@ export interface Criteria {
  */
 export interface Entry<T=void> {
     seq:string;
+    localSeq:number;
     action:Action<T>;
     id:string;
-    meta:MetaData;
+    meta:MetaData|SignedMetaData;
     time:number;
 }
 
+type DID = `did:key:z${string}`
+
 /**
  * A log store for IndexedDB.
- * @see https://logux.org/web-api/#indexedstore
+ *
+ * @property {DID} did
  */
 export class IndexedStore {
     readonly name:string
@@ -121,11 +124,23 @@ export class IndexedStore {
     readonly adding:Record<string, boolean>
     readonly db:Promise<IDBDatabase>
     readonly level:InstanceType<typeof BrowserLevel>
+    readonly did:DID
+    readonly sign?:(meta:MetaData)=>Promise<string>
 
-    constructor (opts:{ deviceName:string }, name = 'partylog') {
+    constructor (opts:{
+        deviceName:string,
+        did:DID,
+        sign?:(meta:MetaData)=>Promise<string>
+    }, name = 'partylog') {
         this.name = name
         this.deviceName = opts.deviceName
         this.adding = {}
+        this.sign = opts.sign
+
+        /**
+         * `did` is added to metadata as the `author` field.
+         */
+        this.did = opts.did
 
         // HERE -- what is the name passed to BrowserLevel?
         // is this like the `name` passed to the objectStore method of IDB?
@@ -194,32 +209,52 @@ export class IndexedStore {
         action:Action<T>,
         prev?:Action<T>
     ):Promise<MetaData|null> {
-        // Can we cache the `lastAdded` value?
+        /**
+         * @TODO
+         * Can we cache the `lastAdded` value?
+         */
         const localSeq:number = (await this.getLastAdded() + 1)
-        const created:number = ts()
+        const time:number = ts()
 
         // a seq that sorts correctly
-        // time + deviceName + local seq integer
-        const seq = '' + created + ':' + this.deviceName + ':' + localSeq
+        // time +  local seq integer + deviceName
+        const seq = '' + time + ':' + localSeq + ':' + this.deviceName
 
-        const newMetadata:Omit<MetaData, 'id'> = {
-            prev: prev ? prev.meta!.id : '',
+        let newMetadata:Omit<Omit<SignedMetaData, 'id'>, 'signature'> = {
+            prev: prev ? prev.meta!.id : null,
             seq,
             localSeq,
-            time: created,
-            author: 'did:key:z123',
-            signature: '123'
+            time,
+            author: this.did
+        }
+
+        if (this.sign) {
+            // sign the metadata, then create the ID
+            (newMetadata as Omit<SignedMetaData, 'id'>) = Object.assign(
+                newMetadata,
+                { signature: await this.sign(stringify(newMetadata)) }
+            );
+
+            (newMetadata as SignedMetaData) = Object.assign(
+                newMetadata as Omit<SignedMetaData, 'id'>,
+                { id: toString(blake3(stringify(newMetadata)), 'base64urlpad') }
+            )
+        } else {
+            // no signature, just create an ID
+            (newMetadata as MetaData) = Object.assign(newMetadata, {
+                id: toString(blake3(stringify(newMetadata)), 'base64urlpad')
+            })
         }
 
         // take the hash of the metadata
-        const newID = toString(blake3(stringify(newMetadata)), 'base64urlpad')
 
         const entry:Entry<T> = {
             action,
             seq,
-            id: newID,
-            time: created,
-            meta: { id: newID, ...newMetadata },
+            localSeq,
+            id: (newMetadata as MetaData).id,
+            time,
+            meta: newMetadata as MetaData
         }
 
         if (this.adding[entry.seq]) {
@@ -331,6 +366,7 @@ export class IndexedStore {
 
     /**
      * Get the last added `seq` number of actions.
+     * @TODO -- cache this value
      * @returns {Promise<number>}
      */
     async getLastAdded ():Promise<number> {
@@ -338,7 +374,7 @@ export class IndexedStore {
             (await this.os('log')).openCursor(null, 'prev')
         )
 
-        return cursor ? parseInt(cursor.value.seq) : 0
+        return cursor ? parseInt(cursor.value.localSeq) : 0
     }
 
     /**
@@ -363,7 +399,9 @@ export class IndexedStore {
     /**
      * @TODO -- delete the content, keep the metadata
      * @TODO -- sync delete actions with the remote store
+     *
      * Remove an action from the local store.
+     *
      * @param {string} id The ID to delete
      * @returns {Promise<null|[Action, MetaData]>} `null` if the ID does not
      * exist, the removed action otherwise.
