@@ -1,10 +1,19 @@
 import { createDebug } from '@nichoth/debug'
+// import { EntryStream } from 'level-web-stream'
 import { toString } from 'uint8arrays'
 import stringify from 'json-canon'
 import { blake3 } from '@noble/hashes/blake3'
 import ts from 'monotonic-timestamp'
 import { BrowserLevel } from 'browser-level'
-import { Action } from './actions.js'
+import { createDeviceName } from '@bicycle-codes/identity'
+import charwise from 'charwise'
+import {
+    Action,
+    Metadata,
+    DeserializedSeq,
+    DID,
+    EncryptedMessage
+} from './actions.js'
 const debug = createDebug()
 
 const VERSION = 1
@@ -14,11 +23,11 @@ debug('version', VERSION)
 /**
  * [timestamp, localSeq, deviceName]
  */
-export type DeserializedSeq = [
-    timestamp:number,
-    localSeq:number,
-    deviceName:string
-]
+// export type DeserializedSeq = [
+//     timestamp:number,
+//     localSeq:number,
+//     deviceName:string
+// ]
 
 /**
  * __The Sync Algorithm__
@@ -26,38 +35,43 @@ export type DeserializedSeq = [
  * track lastSynced + the seq
  */
 
-export interface MetaData {
-    /**
-     * This is the primary key. It is:
-     *      `time + ':' + localSeq + ':' + this.deviceName`
-     *
-     * NOTE -- this is sorted correctly for multi-device updates, and
-     * guaranteed to by unique.
-     */
-    seq:string;
+// export interface MetaData {
+//     /**
+//      * This is the primary key. It is:
+//      *      `time + ':' + localSeq + ':' + this.deviceName`
+//      *
+//      * NOTE -- this is sorted correctly for multi-device updates, and
+//      * guaranteed to by unique.
+//      */
+//     seq:string;
 
-    /**
-     * Hash of the previous message (need this for sync)
-     */
-    prev:string|null;
+//     /**
+//      * Hash of the previous message (need this for sync)
+//      */
+//     prev:string|null;
 
-    /**
-     * Unique ID (the hash of the metadata)
-     */
-    id:string;
+//     /**
+//      * Unique ID (the hash of the metadata)
+//      */
+//     id:string;
 
-    /**
-     * Public key used to sign this
-     */
-    author:`did:key:z${string}`;
+//     /**
+//      * Scope, used for querying
+//      */
+//     scope:string;
 
-    /**
-     * Action created time in current node time. Milliseconds since UNIX epoch.
-     */
-    time:number;
-}
+//     /**
+//      * Public key used to sign this
+//      */
+//     author:`did:key:z${string}`;
 
-export interface SignedMetaData extends MetaData {
+//     /**
+//      * Action created time in current node time. Milliseconds since UNIX epoch.
+//      */
+//     time:number;
+// }
+
+export interface SignedMetadata extends Metadata {
     signature:string
 }
 
@@ -65,7 +79,7 @@ export interface LogPage<T> {
     /**
      * Pagination page.
      */
-    entries:[Action<T>, MetaData][]
+    entries:[Action<T>, Metadata][]
 
     /**
      * Next page loader.
@@ -75,33 +89,40 @@ export interface LogPage<T> {
 
 export interface ReadonlyListener<
     ListenerAction extends Action,
-    LogMeta extends MetaData
+    LogMeta extends Metadata
 > {
     (action:ListenerAction, meta:LogMeta):void
 }
 
-/**
- * IndexedDB indexed can only be 1 level deep;
- * that's why we have duplicate keys on the top level & metadata
- */
 export interface Entry<T=void> {
-    seq:string;
-    localSeq:number;
     action:Action<T>;
-    id:string;
-    meta:MetaData|SignedMetaData;
-    time:number;
+    meta:Metadata|SignedMetadata;
 }
 
-type DID = `did:key:z${string}`
+export class LevelStore {
+    level:InstanceType<typeof BrowserLevel>
+    readonly name:string = 'partylog'
+    readonly deviceName:string
+
+    constructor ({ deviceName }:{ deviceName:string }) {
+        this.deviceName = deviceName
+        this.level = new BrowserLevel('partylog', {
+            keyEncoding: charwise
+        })
+    }
+}
 
 /**
  * A log store for IndexedDB.
  *
- * @property {DID} did
+ * @see {@link https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API/Basic_Terminology IndexedDB key characteristics}
+ * @see {@link https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API/Using_IndexedDB Using IndexedDB}
+ *
+ * @property {DID} did This device's DID
  */
 export class IndexedStore {
     readonly name:string
+    readonly username:string
     readonly deviceName:string
     // a map from timestamp to boolean
     readonly adding:Record<string, boolean>
@@ -110,13 +131,25 @@ export class IndexedStore {
     readonly did:DID
     readonly sign?:(meta:string)=>Promise<string>
 
+    static async create (opts:{
+        username:string,
+        did:DID,
+        sign?:(meta:string)=>Promise<string>
+    }) {
+        const deviceName = await createDeviceName(opts.did)
+        const store = new IndexedStore({ ...opts, deviceName })
+        return store
+    }
+
     constructor (opts:{
+        username:string,
         deviceName:string,
         did:DID,
         sign?:(meta:string)=>Promise<string>
     }, name = 'partylog') {
         this.name = name
         this.deviceName = opts.deviceName
+        this.username = opts.username
         this.adding = {}
         this.sign = opts.sign
 
@@ -152,16 +185,24 @@ export class IndexedStore {
                     })
 
                     // the hash of the metadata
-                    log.createIndex('id', 'id', { unique: true })
-                    log.createIndex('localSeq', 'localSeq', { unique: true })
-                    log.createIndex('seq', 'seq', { unique: true })
+                    log.createIndex('id', 'meta.id', { unique: true })
+                    log.createIndex('localSeq', 'meta.localSeq', { unique: true })
+                    log.createIndex('seq', 'meta.seq', { unique: true })
                     log.createIndex('type', 'type', { unique: false })
                     // if the server gets 2 actions created at the same time
                     // by different devices
-                    log.createIndex('time', 'time', { unique: false })
+                    log.createIndex('time', 'meta.time', { unique: false })
                     db.createObjectStore('extra', { keyPath: 'key' })
                 }
             }
+
+            /**
+             * __Get data from the DB__
+             * db.transaction('log')
+             *   .objectStore(storeName)
+             *   .index('seq')
+             *   .get(mySeqValue)
+             */
         })
     }
 
@@ -197,51 +238,50 @@ export class IndexedStore {
      *
      * @param {Action} action
      * @param {MetaData} meta
-     * @returns {Promise<null|MetaData>} Return `null` if the add operation
+     * @returns {Promise<null|Metadata>} Return `null` if the add operation
      * failed, eg b/c the given ID already exists, or we are already adding it.
-     * Return `MetaData` otherwise.
+     * Return `Metadata` otherwise.
      */
     async add<T=void> (
-        action:Action<T>,
+        // action:Action<T>,
+        msg:EncryptedMessage,
         prev?:Action<T>
-    ):Promise<MetaData|null> {
+    ):Promise<Metadata|null> {
         const lastAdded = await this.getLastAdded()
         let localSeq:number
         if (lastAdded === -1) localSeq = 0
         else localSeq = lastAdded[1]
 
-        const time:number = ts()
+        const timestamp:number = ts()
 
         // a seq that sorts correctly
         // time + local seq integer + deviceName
-        const seq = '' + time + ':' + localSeq + ':' + this.deviceName
+        // const seq = '' + time + ':' + localSeq + ':' + this.deviceName
+        const seq = [timestamp, localSeq, this.deviceName] as const
 
-        /**
-         * You can keep all messages, from everyone you're following, in
-         * a single log, and they will sort correctly.
-         */
+        // proof, username, scope
 
-        let newMetadata:Omit<Omit<SignedMetaData, 'id'>, 'signature'> = {
-            prev: prev ? prev.meta!.id : null,
+        let newMetadata:Omit<Omit<SignedMetadata, 'id'>, 'signature'> = {
+            prev: prev ? prev.metadata!.id : null,
             seq,
-            time,
+            timestamp,
             author: this.did
         }
 
         if (this.sign) {
             // sign the metadata, then create the ID
-            (newMetadata as Omit<SignedMetaData, 'id'>) = Object.assign(
+            (newMetadata as Omit<SignedMetadata, 'id'>) = Object.assign(
                 newMetadata,
                 { signature: await this.sign(stringify(newMetadata)) }
             );
 
-            (newMetadata as SignedMetaData) = Object.assign(
-                newMetadata as Omit<SignedMetaData, 'id'>,
+            (newMetadata as SignedMetadata) = Object.assign(
+                newMetadata as Omit<SignedMetadata, 'id'>,
                 { id: toString(blake3(stringify(newMetadata)), 'base64urlpad') }
             )
         } else {
             // no signature, just create an ID
-            (newMetadata as MetaData) = Object.assign(newMetadata, {
+            (newMetadata as Metadata) = Object.assign(newMetadata, {
                 id: toString(blake3(stringify(newMetadata)), 'base64urlpad')
             })
         }
@@ -258,9 +298,9 @@ export class IndexedStore {
             action,
             seq,
             localSeq,
-            id: (newMetadata as MetaData).id,
+            id: (newMetadata as Metadata).id,
             time,
-            meta: newMetadata as MetaData
+            meta: newMetadata as Metadata
         }
 
         if (this.adding[entry.localSeq]) {
@@ -279,16 +319,16 @@ export class IndexedStore {
         delete this.adding[entry.localSeq]
         // here -- should send to server
         // this should happen in the client
-        return newMetadata as MetaData
+        return newMetadata as Metadata
     }
 
     /**
      * Get an action by ID
      *
      * @param {string} id The ID
-     * @returns {Promise<[Action<T>, MetaData]|[null, null]>}
+     * @returns {Promise<[Action<T>, Metadata]|[null, null]>}
      */
-    async byId<T> (id:string):Promise<[Action<T>, MetaData]|[null, null]> {
+    async byId<T> (id:string):Promise<[Action<T>, Metadata]|[null, null]> {
         const result = await promisify<{
             action,
             meta
@@ -302,11 +342,11 @@ export class IndexedStore {
      * Update the metadata of the given ID.
      *
      * @param {string} id The ID to update
-     * @param {Partial<MetaData>} diff The updates
+     * @param {Partial<Metadata>} diff The updates
      * @returns {Promise<boolean>} True if update was successful, false if the
      * given ID was not found.
      */
-    async changeMeta (id:string, diff:Partial<MetaData>):Promise<boolean> {
+    async changeMeta (id:string, diff:Partial<Metadata>):Promise<boolean> {
         const entry = await promisify<Entry>(
             (await this.os('log')).index('id').get(id)
         )
@@ -363,7 +403,7 @@ export class IndexedStore {
 
                 request.onerror = (err) => { reject(err) }
 
-                const entries:[Action<T>, MetaData][] = []
+                const entries:[Action<T>, Metadata][] = []
                 request.onsuccess = () => {
                     const cursor = request.result
                     if (!cursor) return resolve({ entries })
@@ -418,10 +458,10 @@ export class IndexedStore {
      * Remove an action from the local store.
      *
      * @param {string} id The ID to delete
-     * @returns {Promise<null|[Action, MetaData]>} `null` if the ID does not
+     * @returns {Promise<null|[Action, Metadata]>} `null` if the ID does not
      * exist, the removed action otherwise.
      */
-    async remove (id:string):Promise<null|[Action, MetaData]> {
+    async remove (id:string):Promise<null|[Action, Metadata]> {
         const entry = await promisify<Entry>(
             (await this.os('log')).index('id').get(id)
         )
@@ -473,8 +513,8 @@ export class IndexedStore {
  * }
  * ```
  *
- * @param {Partial<MetaData>} firstMeta Some action’s metadata.
- * @param {Partial<MetaData>} secondMeta Other action’s metadata.
+ * @param {Partial<Metadata>} firstMeta Some action’s metadata.
+ * @param {Partial<Metadata>} secondMeta Other action’s metadata.
  */
 export function isFirstOlder (
     firstMeta:{ time:number },

@@ -5,7 +5,7 @@ The server is a "dumb" service. It just records messages that we send to to it,
 and it will read them back in the correct order.
 
 ## scenarios
-Several scenarios that this protocol accounts for.
+Here are several scenarios that this protocol accounts for.
 
 ### Client goes offline and adds some new messages
 
@@ -25,12 +25,13 @@ The server needs to append the two new messages to its log for that user.
 
 Server gets 'hello' message from client, and the client's `last_added`
 number is even with its `last_synced` number (the client has not added any new
-messages during this time).
+messages during this time), so the client's "hello" message does not include
+any messages.
 
 *But* the server does have new messages. So we get the client's hello,
 and it doesn't have any messages, just the last `seq` number that it has.
 
-We have a later `seq` number, so we send all the messages from their
+We have a later `seq` number, so we send all the messages from the
 `seq` in their 'hello' message to our most recent message.
 
 ### Client and server both have new stuff
@@ -45,8 +46,8 @@ and so it sends a message like this
 ```
 
 The server gets the hello, and adds the 3 new messages to the DB. It has also
-gotten 5 new messages from a different device. The server keeps a record of
-devices vs messages synced. It can see that the client device is 5 behind, so
+gotten 5 new messages from a different device. The server reads the `seq` in the
+client's message, and it can see that the client device is 5 behind, so
 it sends the 5 additional messages to the client:
 
 ```js
@@ -76,6 +77,7 @@ The server needs a record like
 }
 ```
 
+-----------------------------------------------------------------------
 
 Note the concept of "subscriptions" here.
 
@@ -87,6 +89,9 @@ server remembers that device 1 has gotten messages up to 42 from device 2, and
 up to 46 from device 3. Device 2 and device 3 are now at 52 each, so that means
 the server will send 10 new messages from device 2, and 6 new messages from
 device 3.
+
+We can keep the messages in a single log, because the `seq` is sortable b/c
+it includes a timestamp.
 
 These messages are indexed by device, but they need to be sortable with respect
 to each other. That explains the choice of `seq` string --
@@ -106,6 +111,19 @@ user A maps to 3 devices: A1, A2 and A3
 I've been thinking of this in terms of a level DB. Meaning, if we create an
 index in the right way, then we can quickily get the right messages.
 
+-----------------------------------------------------------------------
+
+Should add an unencrypted 'scope' field to messages.
+
+Any connection from the user's devices would get messages with a scope of
+'private'. Connections from a user's friend would get messages with a scope of
+'friend'.
+
+## notes
+When user A wants to sync, the server can do a query like, "get me any new
+messages from `userA/device2` or `userA/device3`" if the request comes from
+`userA/device1`.
+
 
 ## other notes
 
@@ -122,3 +140,10 @@ export type EncryptedPostWithAudiences = {
 ```
 
 Each post gets its own key, that is encrypted by the audience that points to it.
+
+-------------------------------------------------------------------------
+
+## Mon, 3-18-2024
+Need to implement
+  * fauna log store
+  * indexedDB / level DB store

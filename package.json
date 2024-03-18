@@ -26,6 +26,7 @@
     "browser-level": "^1.0.1",
     "charwise": "^3.0.1",
     "json-canon": "^1.0.1",
+    "level-web-stream": "^1.1.0",
     "monotonic-timestamp": "^0.0.9",
     "nanoevents": "^9.0.0",
     "nanoid": "^5.0.6",
@@ -33,7 +34,7 @@
     "uint8arrays": "^5.0.2"
   },
   "devDependencies": {
-    "@bicycle-codes/identity": "^0.4.1",
+    "@bicycle-codes/identity": "^0.4.2",
     "@bicycle-codes/tapzero": "^0.9.2",
     "@nichoth/debug": "^0.6.7",
     "@oddjs/odd": "^0.37.2",

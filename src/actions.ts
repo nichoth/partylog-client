@@ -1,20 +1,47 @@
+// type timestamp = number
+// type localSeq = number
+// type deviceName = string
+
+export type DID = `did:key:z${string}`
+
+/**
+ * [timestamp, localSeq, deviceName]
+ */
+export type DeserializedSeq = readonly [
+    timestamp:number,
+    localSeq:number,
+    deviceName:string
+]
+
 export interface Metadata {
     id:string,  // hash of the metadata
-    timestamp: number,
+    timestamp:number,
     proof:string,  // hash of the (unencrypted) content
-    seq:number,
+    seq:DeserializedSeq,
     prev:string|null,
     username:string,
-    type:'post'|'private'
+    author:DID,
+    scope:'post'|'private'
 }
 
-export type Message = {
+/**
+ * This is for protocol messages.
+ * Domain messages are `EncryptedMessage`
+ */
+export interface Action<T = void> {
+    type:string;
+    metadata:Metadata;
+    content:T;
+}
+
+export type EncryptedMessage = {
     metadata:Metadata,
     content:string  // stringified & encrypted JSON object
 }
 
 /**
- * Actions for a general sync protocol.
+ * These are protocol messages. Protocol messages may contain a domain message.
+ * Eg, 'add' message; the body is an encrypted message.
  *
  * 'add' is adding a single message.
  * 'sync' means you are pushing an array of messages.
@@ -22,27 +49,28 @@ export type Message = {
  * 'remove' is the message ID to delete.
  */
 export type Actions = {
-    add: ['add', body:Message];
+    add: ['add', body:EncryptedMessage];
     /**
      * { since } is the `seq` string before the one starting in `messages`
      */
-    sync: ['sync', body:{ since:string, messages:Message[] }];
-    hello: ['hello', body:{ lastAdded:string, messages?:Message[] }];
+    // sync: ['sync', body:{ since:string, messages:Message[] }];
+    hello: ['hello', body:{ lastAdded:string, messages?:EncryptedMessage[] }];
     remove: ['remove', body:{ id:string }]
 }
 
 export type AnyAction =
     | Actions['add']
-    | Actions['sync']
+    // | Actions['sync']
     | Actions['hello']
     | Actions['remove']
 
 /**
  * Create an action to add a single message
+ *
  * @param {Message} body The message
  * @returns {Actions['add']}
  */
-export function AddAction (msg:Message):Actions['add'] {
+export function AddAction (msg:EncryptedMessage):Actions['add'] {
     return ['add', msg]
 }
 
@@ -70,7 +98,7 @@ export function AddAction (msg:Message):Actions['add'] {
  */
 export function HelloAction (
     latest:string,
-    newMsgs?:Message[]
+    newMsgs?:EncryptedMessage[]
 ):Actions['hello'] {
     return ['hello', { lastAdded: latest, messages: newMsgs }]
 }
@@ -82,16 +110,9 @@ export function HelloAction (
  * @param body Array of messages
  * @returns {Actions['sync']}
  */
-export function SyncAction (since:string, body:Message[]):Actions['sync'] {
-    return ['sync', { since, messages: body }]
-}
-
-export interface Action<T = void> {
-    type:string;
-    data:T;
-    meta:Metadata;
-    error?:boolean;
-}
+// export function SyncAction (since:string, body:Message[]):Actions['sync'] {
+//     return ['sync', { since, messages: body }]
+// }
 
 export interface ActionCreator<T> {
     type: string;
@@ -144,9 +165,8 @@ export interface IActionCreatorFactory {
  * @param defaultIsError Function that detects whether action is error given the
  *   payload. Default is `payload => payload instanceof Error`.
  */
-export function ActionCreatorFactory (
-    prefix?:string|null,
-    defaultIsError:(payload:any) => boolean = p => p instanceof Error,
+function ActionCreatorFactory (
+    prefix?:string|null
 ):IActionCreatorFactory {
     const actionTypes:{[type:string]:boolean} = {}
 
@@ -154,8 +174,7 @@ export function ActionCreatorFactory (
 
     function actionCreator<Payload> (
         type:string,
-        commonMeta?:Metadata,
-        isError:((payload:Payload) => boolean)|boolean = defaultIsError,
+        commonMeta?:Metadata
     ) {
         const fullType = base + type
 
@@ -171,15 +190,11 @@ export function ActionCreatorFactory (
             (payload:Payload, meta?:Metadata) => {
                 const action:Partial<Action<Payload>> = {
                     type: fullType,
-                    data: payload,
+                    content: payload,
                 }
 
                 if (commonMeta || meta) {
-                    action.meta = Object.assign({}, commonMeta, meta)
-                }
-
-                if (isError && (typeof isError === 'boolean' || isError(payload))) {
-                    action.error = true
+                    action.metadata = Object.assign({}, commonMeta, meta)
                 }
 
                 return (action as Action<Payload>)
