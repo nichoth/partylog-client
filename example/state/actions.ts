@@ -5,7 +5,7 @@ export const increment = ActionCreator<void>('count/increment')
 export const decrement = ActionCreator<void>('count/decrement')
 export const setCount = ActionCreator<{ value:number }>('count/set')
 
-export const actions = {
+export const Actions = {
     renameUser,
     increment,
     decrement

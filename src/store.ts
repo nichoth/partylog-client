@@ -11,10 +11,25 @@ const VERSION = 1
 
 debug('version', VERSION)
 
+/**
+ * [timestamp, localSeq, deviceName]
+ */
+export type DeserializedSeq = [
+    timestamp:number,
+    localSeq:number,
+    deviceName:string
+]
+
+/**
+ * __The Sync Algorithm__
+ * Don't track offline/connected,
+ * track lastSynced + the seq
+ */
+
 export interface MetaData {
     /**
      * This is the primary key. It is:
-     *      time + ':' + localSeq + ':' + this.deviceName
+     *      `time + ':' + localSeq + ':' + this.deviceName`
      *
      * NOTE -- this is sorted correctly for multi-device updates, and
      * guaranteed to by unique.
@@ -22,17 +37,12 @@ export interface MetaData {
     seq:string;
 
     /**
-     * The sequence number
-     */
-    localSeq:number;
-
-    /**
      * Hash of the previous message (need this for sync)
      */
-    prev:string;
+    prev:string|null;
 
     /**
-     * Action unique ID (the hash of the metadata)
+     * Unique ID (the hash of the metadata)
      */
     id:string;
 
@@ -70,33 +80,6 @@ export interface ReadonlyListener<
     (action:ListenerAction, meta:LogMeta):void
 }
 
-export interface Criteria {
-    /**
-     * Remove reason only for action with `id`.
-     */
-    id?:string
-
-    /**
-     * Remove reason only for actions with lower `added`.
-     */
-    maxAdded?:number
-
-    /**
-     * Remove reason only for actions with bigger `added`.
-     */
-    minAdded?:number
-
-    /**
-     * Remove reason only older than specific action.
-     */
-    olderThan?:MetaData
-
-    /**
-     * Remove reason only younger than specific action.
-     */
-    youngerThan?:MetaData
-}
-
 /**
  * IndexedDB indexed can only be 1 level deep;
  * that's why we have duplicate keys on the top level & metadata
@@ -125,12 +108,12 @@ export class IndexedStore {
     readonly db:Promise<IDBDatabase>
     readonly level:InstanceType<typeof BrowserLevel>
     readonly did:DID
-    readonly sign?:(meta:MetaData)=>Promise<string>
+    readonly sign?:(meta:string)=>Promise<string>
 
     constructor (opts:{
         deviceName:string,
         did:DID,
-        sign?:(meta:MetaData)=>Promise<string>
+        sign?:(meta:string)=>Promise<string>
     }, name = 'partylog') {
         this.name = name
         this.deviceName = opts.deviceName
@@ -182,14 +165,18 @@ export class IndexedStore {
         })
     }
 
-    async getRecordsSinceOffline () {
-        const os = await this.os('log')
-        const index = os.index('type')
-        const cursor = await promisify<IDBCursorWithValue|null>(
-            index.openCursor('offline', 'prev')
-        )
-        cursor?.value
-    }
+    /**
+     * @TODO
+     * Do we want to do this?
+     */
+    // async getRecordsSinceOffline () {
+    //     const os = await this.os('log')
+    //     const index = os.index('type')
+    //     const cursor = await promisify<IDBCursorWithValue|null>(
+    //         index.openCursor('offline', 'prev')
+    //     )
+    //     cursor?.value
+    // }
 
     /**
      * Get a new objectstore.
@@ -218,21 +205,25 @@ export class IndexedStore {
         action:Action<T>,
         prev?:Action<T>
     ):Promise<MetaData|null> {
-        /**
-         * @TODO
-         * Can we cache the `lastAdded` value?
-         */
-        const localSeq:number = (await this.getLastAdded() + 1)
+        const lastAdded = await this.getLastAdded()
+        let localSeq:number
+        if (lastAdded === -1) localSeq = 0
+        else localSeq = lastAdded[1]
+
         const time:number = ts()
 
         // a seq that sorts correctly
-        // time +  local seq integer + deviceName
+        // time + local seq integer + deviceName
         const seq = '' + time + ':' + localSeq + ':' + this.deviceName
+
+        /**
+         * You can keep all messages, from everyone you're following, in
+         * a single log, and they will sort correctly.
+         */
 
         let newMetadata:Omit<Omit<SignedMetaData, 'id'>, 'signature'> = {
             prev: prev ? prev.meta!.id : null,
             seq,
-            localSeq,
             time,
             author: this.did
         }
@@ -257,7 +248,7 @@ export class IndexedStore {
 
         /**
          * @TODO
-         * Need to sedd the new entry to the websocket server, after
+         * Need to send the new entry to the websocket server, after
          * adding it to our local DB.
          *   - should delete the `localSeq` from the metadata and entry,
          *     probably server-side
@@ -287,6 +278,7 @@ export class IndexedStore {
         await (await this.os('log', 'write')).add(entry)
         delete this.adding[entry.localSeq]
         // here -- should send to server
+        // this should happen in the client
         return newMetadata as MetaData
     }
 
@@ -388,14 +380,16 @@ export class IndexedStore {
     /**
      * Get the last added `seq` number of actions.
      * @TODO -- cache this value
-     * @returns {Promise<number>}
+     * @returns {Promise<DeserializedSeq>}
      */
-    async getLastAdded ():Promise<number> {
+    async getLastAdded ():Promise<{ seq:string, id:string }|-1> {
         const cursor = await promisify<IDBCursorWithValue|null>(
             (await this.os('log')).openCursor(null, 'prev')
         )
 
-        return cursor ? parseInt(cursor.value.localSeq) : 0
+        return (cursor ?
+            { seq: cursor.value.seq, id: cursor.value.id } :
+            -1)
     }
 
     /**
@@ -439,20 +433,21 @@ export class IndexedStore {
     }
 
     /**
-     * Set the last synced values.
+     * Set the last synced values. Should pass this the `seq` string from
+     * actions.
      *
-     * @param values Sent & received numbers.
+     * @param values The `seq` string sent or received
      */
     async setLastSynced (
-        values:Partial<{ sent:number, received:number }>
+        values:Partial<{ sent:string, received:string }>
     ):Promise<void> {
         let data:{
             key:'lastSynced',
-            received:number,
-            sent:number
+            received:string|-1,
+            sent:string|-1
         } = await promisify((await this.os('extra')).get('lastSynced'))
 
-        if (!data) data = { key: 'lastSynced', received: 0, sent: 0 }
+        if (!data) data = { key: 'lastSynced', received: -1, sent: -1 }
         if (typeof values.sent !== 'undefined') {
             data.sent = values.sent
         }
@@ -513,4 +508,26 @@ function rejectify (request:IDBRequest, reject:(err?)=>void) {
     request.onerror = () => {
         reject(request.error)
     }
+}
+
+/**
+ * Take a `seq` as a string, return an array of its contents.
+ * @param {string} seq The `seq` string to parse
+ * @returns {DeserializedSeq} An array of `seq` contents
+ */
+export function deserializeSeq (
+    seq:string|-1
+):DeserializedSeq|-1 {
+    if (seq === -1) return -1
+    const parts = seq.split(':')
+    return [parseInt(parts[0]), parseInt(parts[1]), parts[2]]
+}
+
+/**
+ * Take a deserialized `seq`, return the string version.
+ * @param seq Deserialized `seq`
+ * @returns {string}
+ */
+export function serializeSeq (seq:DeserializedSeq):string {
+    return '' + seq[0] + ':' + seq[1] + ':' + seq[2]
 }

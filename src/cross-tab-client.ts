@@ -1,10 +1,14 @@
 import { nanoid } from 'nanoid'
 import { PartySocket } from 'partysocket'
 import { createNanoEvents } from 'nanoevents'
-import { IndexedStore, MetaData } from './store.js'
+import {
+    DeserializedSeq,
+    IndexedStore,
+    MetaData,
+    deserializeSeq
+} from './store.js'
 import { Action } from './actions.js'
 import Debug from '@nichoth/debug'
-export * as Actions from './actions.js'
 const debug = Debug()
 
 export type NodeState =
@@ -15,17 +19,10 @@ export type NodeState =
     | 'synchronized'
 
 /**
- * Client-side, should keep track of the last time we synced, ie,
- * what was our last synchronized number before we went offline?
- *
- * Need some kind of marker in the list of actions. Something that says,
- * "offline"
- * and antoher that says
- * "connected"
+ * [msgType, { seq:[timestamp, localSeq, deviceName], id:string }]
  */
-
 export type SyncMessage =
-    | ['hello', { seq:number, id:string }]
+    | [type:'hello', body:{ seq:DeserializedSeq, id:string }|-1]
 
 /**
  * Logux has this in the CrossTabClient
@@ -44,6 +41,10 @@ export type SyncMessage =
  *     tabs open.
  *   - Save state to indexedDB
  *   - Communicate with the server -- send and receive messages for state sync.
+ *
+ * @TODO
+ * The client should keep a record of the `last_added` message and the
+ * `last_synced` message, use them when sending the 'hello' message.
  */
 export class CrossTabClient {
     role:'follower'|'leader' = 'follower'
@@ -53,7 +54,10 @@ export class CrossTabClient {
     state:NodeState = 'disconnected'
     emitter:ReturnType<typeof createNanoEvents> = createNanoEvents()
     leaderState?:string
-    lastAddedCache:number = -1  // latest `seq` number
+    /**
+     * The serialized `seq`, and the ID (hash)
+     */
+    lastAddedCache:{ seq:string, id:string }|-1 = -1
     lastReceived:number = 0
     received:object = {}
     lastSent:number = 0
@@ -71,6 +75,7 @@ export class CrossTabClient {
         did:`did:key:z${string}`;
         userId:string;
         token:string;
+        sign?:(msg:string)=>Promise<string>
     }) {
         this.did = opts.did
         this.party = new PartySocket({
@@ -124,18 +129,32 @@ export class CrossTabClient {
              * should do a sync protocol in here
              */
             await this.initializing
-            const msg:SyncMessage = ['hello', this.lastAddedCache]
+            const msg:SyncMessage = [
+                'hello',
+                (this.lastAddedCache === -1 ?
+                    -1 :
+                    {
+                        seq: deserializeSeq(this.lastAddedCache.seq) as DeserializedSeq,
+                        id: this.lastAddedCache.id
+                    })
+            ]
             this.party.send(JSON.stringify(msg))
         }
 
         this.party.onmessage = (ev) => {
+            /**
+             * @TODO
+             * handle incoming messages
+             * initially, this will be 'sync' messages
+             */
             debug('on message', JSON.parse(ev.data))
         }
 
         this.userId = opts.userId
         this.store = new IndexedStore({
             deviceName: 'alice',
-            did: 'did:key:z123'
+            did: 'did:key:z123',
+            sign: opts.sign
         })
 
         /**
@@ -161,6 +180,8 @@ export class CrossTabClient {
         this.initialized = true
         this.lastSent = synced.sent
         this.lastReceived = synced.received
+        // this.lastAddedCache = added
+        // this.lastAddedCache = { seq: added.seq }
         this.lastAddedCache = added
     }
 
@@ -168,7 +189,7 @@ export class CrossTabClient {
      * Send a message to the server
      */
     send (msg:any) {
-        if (!this.connected) return
+        if (!this.party.OPEN) return
 
         try {
             this.party.send(JSON.stringify(msg))
@@ -176,22 +197,6 @@ export class CrossTabClient {
             console.error(err)
         }
     }
-
-    /**
-     * Send a sync event
-     */
-    // async syncEvent (
-    //     action:Action,
-    //     meta:MetaData
-    // ) {
-    //     let seq = meta.seq
-    //     if (typeof seq === 'undefined') {
-    //         const lastAdded = this.lastAddedCache
-    //         seq = (lastAdded > this.lastSent) ? lastAdded : this.lastSent
-    //     }
-
-    //     this.sendSync(seq, [[action, meta]])
-    // }
 
     /**
      * This does *not* notify other tabs of state change.
@@ -208,7 +213,7 @@ export class CrossTabClient {
      * Send a message ['sync', seq, ...data]
      * Where data is everything that the server doesn't have
      */
-    sendSync (seq:number, entries:[Action, MetaData][]) {
+    sendSync (seq:number, entries:[Action, MetaData][]):void {
         debug('sending sync...', entries)
 
         const data:(Action|MetaData)[] = []
@@ -233,7 +238,7 @@ export class CrossTabClient {
     }
 
     /**
-     * Add a new action to the log.
+     * Add a new action to the log, and send it to the server.
      *
      * @param {Action} action The action
      * @param {MetaData} meta Metadata
@@ -249,33 +254,18 @@ export class CrossTabClient {
             throw new Error('That ID already exists')
         }
 
-        if (this.lastAddedCache < meta.localSeq) {
-            this.lastAddedCache = meta.localSeq
-        }
-
-        if (this.received && this.received[meta.id]) {
-            delete this.received[meta.id]
-            return null
+        this.lastAddedCache = {
+            seq: meta.seq,
+            id: meta.id
         }
 
         this.emitter.emit('add', [action, meta])
 
         sendToTabs(this, 'add', [action, meta])
 
-        /**
-         * @FIXME
-         * The state sync should make sense.
-         * Need to write a sync protocol.
-         */
-
-        // if (opts.sync) {
-        //     this.syncEvent(action, meta)
-        // }
-
         if (opts.sync) {
-            // do something
-            // need to send the event to the server
-            // need to tell the other tabs about this event
+            this.send(JSON.stringify(action))
+            this.store.setLastSynced({ sent: meta.seq })
         }
 
         return meta
