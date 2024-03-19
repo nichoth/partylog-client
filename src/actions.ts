@@ -1,7 +1,3 @@
-// type timestamp = number
-// type localSeq = number
-// type deviceName = string
-
 export type DID = `did:key:z${string}`
 
 /**
@@ -113,122 +109,122 @@ export function HelloAction (
     return ['hello', { seq: latest, messages: newMsgs }]
 }
 
-/**
- * Create a 'sync' action.
- *
- * @param since The `seq` string of the message before the ones we are sending
- * @param body Array of messages
- * @returns {Actions['sync']}
- */
-// export function SyncAction (since:string, body:Message[]):Actions['sync'] {
-//     return ['sync', { since, messages: body }]
+// /**
+//  * Create a 'sync' action.
+//  *
+//  * @param since The `seq` string of the message before the ones we are sending
+//  * @param body Array of messages
+//  * @returns {Actions['sync']}
+//  */
+// // export function SyncAction (since:string, body:Message[]):Actions['sync'] {
+// //     return ['sync', { since, messages: body }]
+// // }
+
+// export interface ActionCreator<T> {
+//     type: string;
+//     match: (action:Action<T>) => action is Action<T>;
+
+//     /**
+//      * Creates action with given payload and metadata.
+//      *
+//      * @param payload Action payload.
+//      * @param meta Action metadata. Merged with `commonMeta` of Action Creator.
+//      */
+//     (payload:T, meta?:Metadata):Action<T>;
 // }
 
-export interface ActionCreator<T> {
-    type: string;
-    match: (action:Action<T>) => action is Action<T>;
+// export interface IActionCreatorFactory {
+//     /**
+//      * Creates Action Creator that produces actions with given `type` and
+//      * payload of type `Payload`.
+//      *
+//      * @param type Type of created actions.
+//      * @param commonMeta Metadata added to created actions.
+//      * @param isError Defines whether created actions are error actions.
+//      */
+//     <T = void>(
+//       type:string,
+//       commonMeta?:Metadata,
+//       isError?:boolean,
+//     ):ActionCreator<T>;
 
-    /**
-     * Creates action with given payload and metadata.
-     *
-     * @param payload Action payload.
-     * @param meta Action metadata. Merged with `commonMeta` of Action Creator.
-     */
-    (payload:T, meta?:Metadata):Action<T>;
-}
+//     /**
+//      * Creates Action Creator that produces actions with given `type` and payload
+//      * of type `Payload`.
+//      *
+//      * @param type Type of created actions.
+//      * @param commonMeta Metadata added to created actions.
+//      * @param isError Function that detects whether action is error given the
+//      *   payload.
+//      */
+//     <T = void>(
+//       type:string,
+//       commonMeta?:Metadata,
+//       isError?:(payload:T) => boolean,
+//     ):ActionCreator<T>;
+// }
 
-export interface IActionCreatorFactory {
-    /**
-     * Creates Action Creator that produces actions with given `type` and
-     * payload of type `Payload`.
-     *
-     * @param type Type of created actions.
-     * @param commonMeta Metadata added to created actions.
-     * @param isError Defines whether created actions are error actions.
-     */
-    <T = void>(
-      type:string,
-      commonMeta?:Metadata,
-      isError?:boolean,
-    ):ActionCreator<T>;
+// /**
+//  * Creates Action Creators with optional prefix for action types.
+//  *
+//  * @param prefix Prefix to be prepended to action types as `<prefix>/<type>`.
+//  * @param defaultIsError Function that detects whether action is error given the
+//  *   payload. Default is `payload => payload instanceof Error`.
+//  */
+// function ActionCreatorFactory (
+//     prefix?:string|null
+// ):IActionCreatorFactory {
+//     const actionTypes:{[type:string]:boolean} = {}
 
-    /**
-     * Creates Action Creator that produces actions with given `type` and payload
-     * of type `Payload`.
-     *
-     * @param type Type of created actions.
-     * @param commonMeta Metadata added to created actions.
-     * @param isError Function that detects whether action is error given the
-     *   payload.
-     */
-    <T = void>(
-      type:string,
-      commonMeta?:Metadata,
-      isError?:(payload:T) => boolean,
-    ):ActionCreator<T>;
-}
+//     const base = prefix ? `${prefix}/` : ''
 
-/**
- * Creates Action Creators with optional prefix for action types.
- *
- * @param prefix Prefix to be prepended to action types as `<prefix>/<type>`.
- * @param defaultIsError Function that detects whether action is error given the
- *   payload. Default is `payload => payload instanceof Error`.
- */
-function ActionCreatorFactory (
-    prefix?:string|null
-):IActionCreatorFactory {
-    const actionTypes:{[type:string]:boolean} = {}
+//     function actionCreator<Payload> (
+//         type:string,
+//         common?:object
+//     ) {
+//         const fullType = base + type
 
-    const base = prefix ? `${prefix}/` : ''
+//         if (!import.meta.env.PROD) {
+//             if (actionTypes[fullType]) {
+//                 throw new Error(`Duplicate action type: ${fullType}`)
+//             }
 
-    function actionCreator<Payload> (
-        type:string,
-        common?:object
-    ) {
-        const fullType = base + type
+//             actionTypes[fullType] = true
+//         }
 
-        if (!import.meta.env.PROD) {
-            if (actionTypes[fullType]) {
-                throw new Error(`Duplicate action type: ${fullType}`)
-            }
+//         return Object.assign(
+//             (payload:Payload) => {
+//                 const action:Partial<Action<Payload>> = {
+//                     type: fullType,
+//                     data: payload,
+//                 }
 
-            actionTypes[fullType] = true
-        }
+//                 if (common) {
+//                     action.data = Object.assign(common, payload)
+//                 }
 
-        return Object.assign(
-            (payload:Payload) => {
-                const action:Partial<Action<Payload>> = {
-                    type: fullType,
-                    data: payload,
-                }
+//                 return (action as Action<Payload>)
+//             },
+//             {
+//                 type: fullType,
+//                 toString: () => fullType,
+//                 match: (action:Action<Payload>):action is Action<Payload> =>
+//                     action.type === fullType,
+//             },
+//         ) as ActionCreator<Payload>
+//     }
 
-                if (common) {
-                    action.data = Object.assign(common, payload)
-                }
+//     return actionCreator
+// }
 
-                return (action as Action<Payload>)
-            },
-            {
-                type: fullType,
-                toString: () => fullType,
-                match: (action:Action<Payload>):action is Action<Payload> =>
-                    action.type === fullType,
-            },
-        ) as ActionCreator<Payload>
-    }
+// const _createAction = ActionCreatorFactory()
 
-    return actionCreator
-}
-
-const _createAction = ActionCreatorFactory()
-
-/**
- * T is the payload properties; the type param is the `type`.
- *
- * @param {string} type The action type
- * @returns Function that will create actions with the given type.
- */
-export const ActionCreator = function<T> (type:string):(data:T)=>Action<T> {
-    return _createAction<T>(type)
-}
+// /**
+//  * T is the payload properties; the type param is the `type`.
+//  *
+//  * @param {string} type The action type
+//  * @returns Function that will create actions with the given type.
+//  */
+// export const ActionCreator = function<T> (type:string):(data:T)=>Action<T> {
+//     return _createAction<T>(type)
+// }

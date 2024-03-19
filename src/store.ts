@@ -203,7 +203,7 @@ export class IndexedStore {
     }
 
     /**
-     * Add a new domain message to `IndexedDB`.
+     * Add a new domain message to `IndexedDB`. This will create metadata.
      *
      * Should create the `proof` here, so content needs to be unencrypted.
      *
