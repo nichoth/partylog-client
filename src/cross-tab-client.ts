@@ -4,7 +4,6 @@ import { createNanoEvents } from 'nanoevents'
 import { IndexedStore } from './store.js'
 import {
     Metadata,
-    Action,
     DeserializedSeq,
     ProtocolActions,
     EncryptedMessage,
@@ -252,6 +251,7 @@ export class CrossTabClient {
         msg:EncryptedMessage,
         opts:{ sync?:boolean, scope:'post'|'private' }
     ):Promise<Metadata|null> {
+        const sync = opts.sync ?? true
         const meta = await this.store.add(msg, { scope: opts.scope })
         if (!meta) {
             // should not ever happen
@@ -259,19 +259,12 @@ export class CrossTabClient {
         }
 
         this.lastAddedCache = meta.seq
-
-        // this.lastAddedCache = {
-        //     seq: meta.seq,
-        //     id: meta.id
-        // }
-
         this.emitter.emit('add', msg)
-
         sendToTabs(this, 'add', msg)
 
-        if (opts.sync) {
+        if (sync) {
             this.send(JSON.stringify(msg))
-            this.store.setLastSynced({ sent: meta.seq })
+            this.store.setLastSynced({ seq: meta.seq })
         }
 
         return meta

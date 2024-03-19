@@ -52,6 +52,24 @@ export class LevelStore {
             keyEncoding: charwise
         })
     }
+
+    /**
+     * Log entries must be sorted by seq, and have and index for our username.
+     */
+    async getLastAdded () {
+        // const iterator = this.level.iterator({ reverse: true, limit: 1 })
+        // for (const [key, value] of iterator) {
+        //     console.log('key', key, value)
+        // }
+    }
+
+    // async add (
+    //     content:object,
+    //     { scope }:{ scope:'post'|'private' },
+    //     prev?:EncryptedMessage|UnencryptedMessage
+    // ):Promise<Metadata|SignedMetadata|null> {
+    //     const lastAdded = await this.getLastAdded()
+    // }
 }
 
 export const PROOF_ENCODING = 'base64pad'
@@ -75,6 +93,9 @@ export class IndexedStore {
     readonly did:DID
     readonly sign?:(meta:string)=>Promise<string>
 
+    /**
+     * Factory function b/c async
+     */
     static async create (opts:{
         username:string,
         did:DID,
@@ -125,7 +146,7 @@ export class IndexedStore {
                     log = db.createObjectStore('log', {
                         // autoIncrement: true,
                         autoIncrement: false,
-                        keyPath: 'metadata.id'
+                        keyPath: 'metadata.seq'  // sort by timestamp
                     })
 
                     // the hash of the metadata
@@ -134,7 +155,7 @@ export class IndexedStore {
 
                     // log.createIndex('id', 'metadata.id', { unique: true })
                     log.createIndex('seq', 'metadata.seq', { unique: true })
-                    log.createIndex('type', 'metadata.type', { unique: false })
+                    log.createIndex('scope', 'metadata.scope', { unique: false })
                     log.createIndex('username', 'metadata.username', {
                         unique: false
                     })
@@ -248,22 +269,17 @@ export class IndexedStore {
         }
 
         /**
-         * @TODO
-         * Need to send the new entry to the websocket server, after
-         * adding it to our local DB.
-         *   - should delete the `localSeq` from the metadata,
-         *     probably server-side
+         * @TODO encrypt the content
          */
-
         const entry:EncryptedMessage = {
             metadata: newMetadata as Metadata|SignedMetadata,
-            content: 'testing'
+            content: JSON.stringify(content)
         }
 
         if (this.adding[localSeq]) {
             return null
         }
-        this.adding[entry.metadata.seq[1]] = true
+        this.adding[localSeq] = true
 
         // this will not happen
         const exist = await promisify(
@@ -294,24 +310,24 @@ export class IndexedStore {
         return [null, null]
     }
 
-    /**
-     * Update the metadata of the given ID.
-     *
-     * @param {string} id The ID to update
-     * @param {Partial<Metadata>} diff The updates
-     * @returns {Promise<boolean>} True if update was successful, false if the
-     * given ID was not found.
-     */
-    async changeMeta (id:string, diff:Partial<Metadata>):Promise<boolean> {
-        const entry = await promisify<EncryptedMessage>(
-            (await this.os('log')).index('id').get(id)
-        )
-        if (!entry) return false
+    // /**
+    //  * Update the metadata of the given ID.
+    //  *
+    //  * @param {string} id The ID to update
+    //  * @param {Partial<Metadata>} diff The updates
+    //  * @returns {Promise<boolean>} True if update was successful, false if the
+    //  * given ID was not found.
+    //  */
+    // async changeMeta (id:string, diff:Partial<Metadata>):Promise<boolean> {
+    //     const entry = await promisify<EncryptedMessage>(
+    //         (await this.os('log')).index('id').get(id)
+    //     )
+    //     if (!entry) return false
 
-        for (const key in diff) entry.metadata[key] = diff[key];
-        (await this.os('log', 'write')).put(entry)
-        return true
-    }
+    //     for (const key in diff) entry.metadata[key] = diff[key];
+    //     (await this.os('log', 'write')).put(entry)
+    //     return true
+    // }
 
     /**
      * Delete this database.
@@ -330,22 +346,20 @@ export class IndexedStore {
      *
      * We need a pagination API because the log could be very big.
      *
-     * @param {{ index, order }} opts Query options.
-     * @returns Promise with first page.
+     * @param {{ index:string, order:'time' }} opts Query options.
+     * @returns {Promise<LogPage<T>>} Promise with first page.
      */
     async get<T=void> ({ index, order }:{
-        index:string;
+        index?:string;
         order?:'time'
-    }):Promise<LogPage<T>> {
+    } = {}):Promise<LogPage<T>> {
         return new Promise((resolve, reject) => {
             this.os('log').then(log => {
                 let request:IDBRequest<IDBCursorWithValue|null>
                 if (index) {
                     if (order === 'time') {
-                        // index and order === time
                         request = log.index('time').openCursor(null, 'prev')
                     } else {
-                        // index, order !== time
                         const keyRange = IDBKeyRange.only(index)
                         request = log.index('indexes').openCursor(keyRange, 'prev')
                     }
@@ -376,15 +390,28 @@ export class IndexedStore {
     /**
      * Get the last added `seq` number of actions.
      * @TODO -- cache this value
-     * @returns {Promise<DeserializedSeq>}
+     * @returns {Promise<{ seq:DeserializedSeq, id:string }|-1>}
      */
     async getLastAdded ():Promise<{ seq:DeserializedSeq, id:string }|-1> {
+        // const cursor = await promisify<IDBCursorWithValue|null>(
+        //     (await this.os('log')).openCursor(null, 'prev')
+        // )
+
         const cursor = await promisify<IDBCursorWithValue|null>(
-            (await this.os('log')).openCursor(null, 'prev')
+            (await this.os('log'))
+                .index('username')
+                .openCursor(this.username, 'prev')
         )
 
+        /**
+         * Need to get log entries by our username
+         *
+         * > you can limit the range of items that are retrieved by using a key
+         * > range object
+         */
+
         return (cursor ?
-            { seq: cursor.value.seq, id: cursor.value.id } :
+            { seq: cursor.value.metadata.seq, id: cursor.value.metadata.id } :
             -1)
     }
 
@@ -439,29 +466,32 @@ export class IndexedStore {
     }
 
     /**
-     * Set the last synced values. Should pass this the `seq` string from
+     * Set the last synced values. Should pass this the `seq` value from
      * actions.
      *
      * @param values The `seq` string sent or received
      */
     async setLastSynced (
-        values:Partial<{ received:string, sent:string }>
+        value:{ seq:DeserializedSeq }
     ):Promise<void> {
-        let data:{
-            key:'lastSynced',
-            received:string|-1,
-            sent:string|-1
-        } = await promisify((await this.os('extra')).get('lastSynced'))
+        // const data:{
+        //     key:'lastSynced',
+        //     seq:DeserializedSeq|-1
+        //     // received:string|-1,
+        //     // sent:string|-1
+        // } = await promisify((await this.os('extra')).get('lastSynced'));
 
-        if (!data) data = { key: 'lastSynced', received: -1, sent: -1 }
-        if (typeof values.sent !== 'undefined') {
-            data.sent = values.sent
-        }
-        if (typeof values.received !== 'undefined') {
-            data.received = values.received
-        }
+        // if (!data) data = { key: 'lastSynced', received: -1, sent: -1 }
+        // if (typeof values.sent !== 'undefined') {
+        //     data.sent = values.sent
+        // }
+        // if (typeof values.received !== 'undefined') {
+        //     data.received = values.received
+        // }
 
-        (await this.os('extra', 'write')).put(data)
+        (await this.os('extra', 'write')).put(value)
+
+        // await this.os('extra', 'write').put(data)
     }
 }
 
