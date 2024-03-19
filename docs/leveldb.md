@@ -29,3 +29,10 @@ await db.batch([{
   value: '123'
 }])
 ```
+
+
+------------------------------------------------------------------
+
+
+[levelDB transcoder.encoding docs](https://github.com/Level/transcoder/blob/main/index.js#L51)
+

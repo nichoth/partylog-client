@@ -225,8 +225,13 @@ export class IndexedStore {
     ):Promise<Metadata|SignedMetadata|null> {
         const lastAdded = await this.getLastAdded()
         let localSeq:number
-        if (lastAdded === -1) localSeq = 0
+        if (lastAdded.seq === -1) localSeq = 0
         else localSeq = (lastAdded.seq[1] + 1)
+
+        /**
+         * Need to make a decision about storing only our own posts,
+         * or the posts of all friends.
+         */
 
         const timestamp:number = ts()
 
@@ -295,19 +300,18 @@ export class IndexedStore {
     }
 
     /**
-     * Get an action by ID
+     * Get a message by ID
      *
      * @param {string} id The ID
      * @returns {Promise<[Action<T>, Metadata]|[null, null]>}
      */
-    async byId<T> (id:string):Promise<[Action<T>, Metadata]|[null, null]> {
-        const result = await promisify<{
-            action,
-            meta
-        }>((await this.os('log')).index('id').get(id))
+    async byId (id:string):Promise<UnencryptedMessage|null> {
+        const result = await promisify<UnencryptedMessage>(
+            (await this.os('log')).index('id').get(id)
+        )
 
-        if (result) return [result.action, result.meta]
-        return [null, null]
+        if (result) return result
+        return null
     }
 
     // /**
@@ -392,7 +396,7 @@ export class IndexedStore {
      * @TODO -- cache this value
      * @returns {Promise<{ seq:DeserializedSeq, id:string }|-1>}
      */
-    async getLastAdded ():Promise<{ seq:DeserializedSeq, id:string }|-1> {
+    async getLastAdded ():Promise<{ seq:DeserializedSeq|-1, id?:string }> {
         // const cursor = await promisify<IDBCursorWithValue|null>(
         //     (await this.os('log')).openCursor(null, 'prev')
         // )
@@ -410,9 +414,9 @@ export class IndexedStore {
          * > range object
          */
 
-        return (cursor ?
+        return cursor ?
             { seq: cursor.value.metadata.seq, id: cursor.value.metadata.id } :
-            -1)
+            { seq: -1 }
     }
 
     // ['hello', { seq: latest, messages: newMsgs }]
@@ -423,7 +427,7 @@ export class IndexedStore {
      *
      * @returns {Promise<{ seq:DeserializedSeq }>}
      */
-    async getLastSynced ():Promise<{ seq:DeserializedSeq }|-1> {
+    async getLastSynced ():Promise<{ seq:DeserializedSeq|-1 }> {
         // const data:{
         //     received:number,
         //     sent:number
@@ -440,7 +444,7 @@ export class IndexedStore {
         if (data) {
             return data
         } else {
-            return -1
+            return { seq: -1 }
         }
     }
 

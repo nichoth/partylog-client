@@ -112,7 +112,7 @@ export default class WebSocketServer implements Party.Server {
             this.client.query(q.Map(
                 body,
                 q.Lambda('message', q.Create(
-                    q.Collection('alice'), { data: q.Var('message') }
+                    q.Collection('log'), { data: q.Var('message') }
                 ))
             ))
         }
@@ -122,7 +122,7 @@ export default class WebSocketServer implements Party.Server {
         if (type === 'add') {
             // add a single message
             this.client.query(q.Create(
-                q.Collection('alice'),
+                q.Collection('log'),
                 { data: body }
             ))
         }

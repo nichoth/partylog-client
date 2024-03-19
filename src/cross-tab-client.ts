@@ -53,16 +53,15 @@ export class CrossTabClient {
     /**
      * The serialized `seq`, and the ID (hash)
      */
-    lastAddedCache:DeserializedSeq|-1 = -1
-    lastSyncedCache:{ seq:DeserializedSeq, id:string }|-1 = -1
+    lastAddedCache:{ seq: DeserializedSeq|-1 } = { seq: -1 }
+    lastSyncedCache:{ seq:DeserializedSeq|-1, id?:string } = { seq: -1 }
     lastReceived:number = 0
-    lastSynced:{ seq: DeserializedSeq }|-1 = -1
     received:object = {}
     lastSent:number = 0
     syncing:number = 0
     initializing?:Promise<void>
     initialized:boolean = false
-    username?:string
+    username:string
     readonly tabId:string = nanoid(8)
     readonly store:InstanceType<typeof IndexedStore>
     readonly party:InstanceType<typeof PartySocket>
@@ -72,13 +71,24 @@ export class CrossTabClient {
     constructor (opts:{
         host:string;
         did:`did:key:z${string}`;
-        token:string;
         username:string;
+        token:string;
         sign?:(msg:string)=>Promise<string>
     }) {
         this.did = opts.did
+        this.username = opts.username
+
+        /**
+         * @see {@link https://docs.partykit.io/reference/partysocket-api/ party docs}
+         * > that the id needs to be unique per connection, not per user
+         *
+         * But it's ok, because we are using the leader tab system,
+         * so there is only 1 connection per device. You would want to
+         * use the `deviceName`, though, not `username`.
+         */
         this.party = new PartySocket({
             party: 'main',
+            id: opts.username,
             room: 'main',
             host: opts.host,
             startClosed: true,
@@ -128,28 +138,22 @@ export class CrossTabClient {
              * @TODO
              * should do a sync protocol in here
              */
-            // await this.initializing
-            // this.sendHello()
-            // const msg:ProtocolActions['hello'] = [
-            //     'hello',
-            //     { seq: this.lastAddedCache[1] },
-            // ]
-            // this.party.send(JSON.stringify(msg))
+
+            this.sendHello()
         }
 
         this.party.onmessage = (ev) => {
             /**
              * @TODO
              * handle incoming messages
-             * initially, this will be 'sync' messages
              */
-            debug('on message', JSON.parse(ev.data))
+            debug('got a message', JSON.parse(ev.data))
         }
 
         this.store = new IndexedStore({
-            deviceName: 'alicesDevice',
-            username: 'alice',
-            did: 'did:key:z123',
+            deviceName: opts.username,
+            username: opts.username,
+            did: this.did,
             sign: opts.sign
         })
 
@@ -160,7 +164,7 @@ export class CrossTabClient {
             window.addEventListener('storage', ev => this.onStorage(ev))
         }
 
-        this.initializing = this.initialize()
+        // this.initializing = this.initialize()
     }
 
     on (ev:'add', listener:(msg:EncryptedMessage)=>any) {
@@ -172,12 +176,15 @@ export class CrossTabClient {
      */
     static async create (opts:{
         host:string;
+        username?:string;
         did:`did:key:z${string}`;
         token:string;
         sign?:(msg:string)=>Promise<string>
     }):Promise<InstanceType<typeof CrossTabClient>> {
-        const username = await createDeviceName(opts.did)
-        const client = new CrossTabClient({ ...opts, username })
+        const client = new CrossTabClient({
+            ...opts,
+            username: opts.username || await createDeviceName(opts.did)
+        })
         await client.initialize()
         return client
     }
@@ -188,9 +195,8 @@ export class CrossTabClient {
             this.store.getLastAdded()
         ])
         this.initialized = true
-        this.lastSynced = synced
-        this.lastAddedCache = added === -1 ? -1 : added.seq
-        this.username = await createDeviceName(this.did)
+        this.lastSyncedCache = synced
+        this.lastAddedCache = added.seq === -1 ? { seq: -1 } : added
     }
 
     /**
@@ -222,8 +228,49 @@ export class CrossTabClient {
      * Send a message ['hello', { seq, messages: ...data }]
      * Where data is everything that the server doesn't have
      */
-    sendHello (entries:EncryptedMessage[]):void {
-        debug('sending sync...', entries)
+    async sendHello ():Promise<void> {
+        const lastAdded = this.lastAddedCache.seq !== -1 ?
+            this.lastAddedCache :
+            await this.store.getLastAdded()
+
+        const lastSynced = this.lastSyncedCache.seq !== -1 ?
+            this.lastSyncedCache :
+            await this.store.getLastSynced()
+
+        // need to compare just the seq numbers for *this user*
+        // this
+
+        if (lastAdded.seq > lastSynced.seq) {
+            /**
+             * @TODO
+             * get the difference between last synced and last added
+             */
+            debug('sending hello...', entries)
+            const msg = HelloAction(this.lastAddedCache.seq, entries)
+            this.send(msg)
+            this.syncing++
+            this.setState('sending')
+            if (this.syncing > 0) this.syncing--
+            if (this.syncing === 0) {
+                /**
+                 * @TODO
+                 * What do we use these states for?
+                 */
+                this.setState('synchronized')
+            }
+        } else {
+            // we have not added any new messages while we were offline
+            const msg = HelloAction(this.lastAddedCache.seq)
+            this.send(msg)
+            // should get a response with any additional messages that the
+            // server has
+        }
+
+        /**
+         * This depends on what all data we save -- only ours, or our friend's
+         * as well. In the latter case, would need to filter by username,
+         * to get only *our* logs.
+         */
 
         /**
          * In here, should lookup the lastSynced and lastAdded numbers
@@ -231,16 +278,6 @@ export class CrossTabClient {
          */
 
         // ['hello', { seq: latest, messages: newMsgs }]
-
-        const msg = HelloAction(this.lastAddedCache, entries)
-
-        this.syncing++
-        this.setState('sending')
-        this.send(msg)
-        if (this.syncing > 0) this.syncing--
-        if (this.syncing === 0) {
-            this.setState('synchronized')
-        }
     }
 
     /**
@@ -259,7 +296,7 @@ export class CrossTabClient {
         opts:{ sync?:boolean, scope:'post'|'private' }
     ):Promise<Metadata|null> {
         const sync = opts.sync ?? true
-        const meta = await this.store.add(msg, { scope: opts.scope })
+        const meta = await (await this.store).add(msg, { scope: opts.scope })
         if (!meta) {
             // should not ever happen
             throw new Error('That ID already exists')
@@ -270,13 +307,13 @@ export class CrossTabClient {
             content: JSON.stringify(msg)
         })
 
-        this.lastAddedCache = meta.seq
+        this.lastAddedCache = { seq: meta.seq }
         this.emitter.emit('add', msg)
         sendToTabs(this, 'add', msg)
 
         if (sync) {
-            this.send(action)
-            this.store.setLastSynced({ seq: meta.seq })
+            this.send(action);
+            (await this.store).setLastSynced({ seq: meta.seq })
         }
 
         return meta
@@ -287,6 +324,7 @@ export class CrossTabClient {
      *
      * @param {StorageEvent} ev Storage event
      * @returns {void}
+     * @TODO -- implement this
      */
     onStorage (ev:StorageEvent) {
         if (ev.newValue === null) return
@@ -302,17 +340,6 @@ export class CrossTabClient {
                 if (!meta.tab || meta.tab === this.tabId) {
                     // need to update our in-memory data with the new action
 
-                    // if (isMemory(this.log.store)) {
-                    //     this.log.store.add(action, meta)
-                    // }
-
-                    // this.node is a BaseNode
-
-                    // actionEvents just emits events on the given emitter
-                    // actionEvents(this.emitter, 'add', action, meta)
-
-                    // this.node is a ClientNode from core,
-                    // extends BaseNode
                     if (this.role === 'leader') {
                         // add to the local log
                         this.add(action, { scope: 'private' })
@@ -352,14 +379,18 @@ export class CrossTabClient {
             localStorage.removeItem(storageKey(this, 'add'))
             localStorage.removeItem(storageKey(this, 'node_state'))
             localStorage.removeItem(storageKey(this, 'leader_state'))
-            localStorage.removeItem(storageKey(this, 'client'))
         }
     }
 }
 
+export type AppStorageEvent =
+    | 'add'
+    | 'node_state'
+    | 'leader_state'
+
 function storageKey (
     client:InstanceType<typeof CrossTabClient>,
-    name:'add'|'node_state'|'leader_state'|'client'
+    name:AppStorageEvent
 ) {
     return client.prefix + ':' + client.username + ':' + name
 }

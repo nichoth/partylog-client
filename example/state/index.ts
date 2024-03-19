@@ -88,7 +88,7 @@ export async function State ():Promise<{
      * Handle route changes
      */
     onRoute((path:string, data) => {
-        const newPath = path.replace('/logux-party/', '/')  // <- for github pages
+        const newPath = path.replace('/partylog-client/', '/')  // <- for github pages
         state.route.value = newPath
         // handle scroll state like a web browser
         // (restore scroll position on back/forward)

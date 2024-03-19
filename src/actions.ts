@@ -97,16 +97,17 @@ export function AddAction (msg:EncryptedMessage):ProtocolActions['add'] {
  * The client keeps track of the last synced message and the last locally
  * added message. If `last_added` is bigger than `last_synced`, then we
  * send the difference between `last_synced` and `last_added`.
- * @param {string} latest The latest `seq` string you have
+ *
+ * @param {string} latest The latest `seq` string you have (the last added)
  * @param {Message[]} newMsgs The difference between `last_added`
  * and `last_synced` (the new messages).
  * @returns {Actions['hello']}
  */
 export function HelloAction (
-    latest:DeserializedSeq|-1,
+    lastAdded:DeserializedSeq|-1,
     newMsgs?:EncryptedMessage[]
 ):ProtocolActions['hello'] {
-    return ['hello', { seq: latest, messages: newMsgs }]
+    return ['hello', { seq: lastAdded, messages: newMsgs }]
 }
 
 // /**
