@@ -10,70 +10,17 @@ import charwise from 'charwise'
 import {
     Action,
     Metadata,
+    SignedMetadata,
     DeserializedSeq,
     DID,
-    EncryptedMessage
+    EncryptedMessage,
+    UnencryptedMessage
 } from './actions.js'
 const debug = createDebug()
 
 const VERSION = 1
 
 debug('version', VERSION)
-
-/**
- * [timestamp, localSeq, deviceName]
- */
-// export type DeserializedSeq = [
-//     timestamp:number,
-//     localSeq:number,
-//     deviceName:string
-// ]
-
-/**
- * __The Sync Algorithm__
- * Don't track offline/connected,
- * track lastSynced + the seq
- */
-
-// export interface MetaData {
-//     /**
-//      * This is the primary key. It is:
-//      *      `time + ':' + localSeq + ':' + this.deviceName`
-//      *
-//      * NOTE -- this is sorted correctly for multi-device updates, and
-//      * guaranteed to by unique.
-//      */
-//     seq:string;
-
-//     /**
-//      * Hash of the previous message (need this for sync)
-//      */
-//     prev:string|null;
-
-//     /**
-//      * Unique ID (the hash of the metadata)
-//      */
-//     id:string;
-
-//     /**
-//      * Scope, used for querying
-//      */
-//     scope:string;
-
-//     /**
-//      * Public key used to sign this
-//      */
-//     author:`did:key:z${string}`;
-
-//     /**
-//      * Action created time in current node time. Milliseconds since UNIX epoch.
-//      */
-//     time:number;
-// }
-
-export interface SignedMetadata extends Metadata {
-    signature:string
-}
 
 export interface LogPage<T> {
     /**
@@ -88,15 +35,10 @@ export interface LogPage<T> {
 }
 
 export interface ReadonlyListener<
-    ListenerAction extends Action,
+    ListenerAction extends Action<any>,
     LogMeta extends Metadata
 > {
     (action:ListenerAction, meta:LogMeta):void
-}
-
-export interface Entry<T=void> {
-    action:Action<T>;
-    meta:Metadata|SignedMetadata;
 }
 
 export class LevelStore {
@@ -111,6 +53,8 @@ export class LevelStore {
         })
     }
 }
+
+export const PROOF_ENCODING = 'base64pad'
 
 /**
  * A log store for IndexedDB.
@@ -181,17 +125,23 @@ export class IndexedStore {
                     log = db.createObjectStore('log', {
                         // autoIncrement: true,
                         autoIncrement: false,
-                        keyPath: 'seq'
+                        keyPath: 'metadata.id'
                     })
 
                     // the hash of the metadata
-                    log.createIndex('id', 'meta.id', { unique: true })
-                    log.createIndex('localSeq', 'meta.localSeq', { unique: true })
-                    log.createIndex('seq', 'meta.seq', { unique: true })
-                    log.createIndex('type', 'type', { unique: false })
+                    // log.createIndex('id', 'metadata.id', { unique: true })
+                    // log.createIndex('localSeq', 'metadata.localSeq', { unique: true })
+
+                    // log.createIndex('id', 'metadata.id', { unique: true })
+                    log.createIndex('seq', 'metadata.seq', { unique: true })
+                    log.createIndex('type', 'metadata.type', { unique: false })
+                    log.createIndex('username', 'metadata.username', {
+                        unique: false
+                    })
+
                     // if the server gets 2 actions created at the same time
                     // by different devices
-                    log.createIndex('time', 'meta.time', { unique: false })
+                    log.createIndex('time', 'metadata.timestamp', { unique: false })
                     db.createObjectStore('extra', { keyPath: 'key' })
                 }
             }
@@ -232,25 +182,30 @@ export class IndexedStore {
     }
 
     /**
-     * Add an action to `IndexedDB`. Valid `MetaData` will be created.
+     * Add a new domain message to `IndexedDB`.
+     *
+     * Should create the `proof` here, so content needs to be unencrypted.
      *
      * ID is the hash of the metadata.
      *
-     * @param {Action} action
-     * @param {MetaData} meta
+     * @param {object} content The message content, unencrypted b/c we calculate
+     * the `proof` hash here.
+     * @param {{ scope:'post'|'private' }} prev The 'scope' field.
+     * @param {EncryptedMessage|UnencryptedMessage} [prev] The previous message,
+     * for the Merkle chain.
      * @returns {Promise<null|Metadata>} Return `null` if the add operation
      * failed, eg b/c the given ID already exists, or we are already adding it.
      * Return `Metadata` otherwise.
      */
-    async add<T=void> (
-        // action:Action<T>,
-        msg:EncryptedMessage,
-        prev?:Action<T>
-    ):Promise<Metadata|null> {
+    async add (
+        content:object,
+        { scope }:{ scope:'post'|'private' },
+        prev?:EncryptedMessage|UnencryptedMessage
+    ):Promise<Metadata|SignedMetadata|null> {
         const lastAdded = await this.getLastAdded()
         let localSeq:number
         if (lastAdded === -1) localSeq = 0
-        else localSeq = lastAdded[1]
+        else localSeq = (lastAdded.seq[1] + 1)
 
         const timestamp:number = ts()
 
@@ -259,15 +214,21 @@ export class IndexedStore {
         // const seq = '' + time + ':' + localSeq + ':' + this.deviceName
         const seq = [timestamp, localSeq, this.deviceName] as const
 
-        // proof, username, scope
+        const proof = toString(blake3(stringify(content)), PROOF_ENCODING)
 
         let newMetadata:Omit<Omit<SignedMetadata, 'id'>, 'signature'> = {
             prev: prev ? prev.metadata!.id : null,
             seq,
+            proof,
+            scope,
+            username: this.username,
             timestamp,
             author: this.did
         }
 
+        /**
+         * Add the ID.
+         */
         if (this.sign) {
             // sign the metadata, then create the ID
             (newMetadata as Omit<SignedMetadata, 'id'>) = Object.assign(
@@ -280,7 +241,7 @@ export class IndexedStore {
                 { id: toString(blake3(stringify(newMetadata)), 'base64urlpad') }
             )
         } else {
-            // no signature, just create an ID
+            // no signature, so just create an ID
             (newMetadata as Metadata) = Object.assign(newMetadata, {
                 id: toString(blake3(stringify(newMetadata)), 'base64urlpad')
             })
@@ -290,36 +251,31 @@ export class IndexedStore {
          * @TODO
          * Need to send the new entry to the websocket server, after
          * adding it to our local DB.
-         *   - should delete the `localSeq` from the metadata and entry,
+         *   - should delete the `localSeq` from the metadata,
          *     probably server-side
          */
 
-        const entry:Entry<T> = {
-            action,
-            seq,
-            localSeq,
-            id: (newMetadata as Metadata).id,
-            time,
-            meta: newMetadata as Metadata
+        const entry:EncryptedMessage = {
+            metadata: newMetadata as Metadata|SignedMetadata,
+            content: 'testing'
         }
 
-        if (this.adding[entry.localSeq]) {
+        if (this.adding[localSeq]) {
             return null
         }
-        this.adding[entry.localSeq] = true
+        this.adding[entry.metadata.seq[1]] = true
 
         // this will not happen
         const exist = await promisify(
-            (await this.os('log')).index('id').get(entry.id)
+            (await this.os('log')).index('id').get(entry.metadata.id)
         )
 
         if (exist) return null
 
         await (await this.os('log', 'write')).add(entry)
-        delete this.adding[entry.localSeq]
-        // here -- should send to server
-        // this should happen in the client
-        return newMetadata as Metadata
+        delete this.adding[localSeq]
+
+        return newMetadata as Metadata|SignedMetadata
     }
 
     /**
@@ -347,12 +303,12 @@ export class IndexedStore {
      * given ID was not found.
      */
     async changeMeta (id:string, diff:Partial<Metadata>):Promise<boolean> {
-        const entry = await promisify<Entry>(
+        const entry = await promisify<EncryptedMessage>(
             (await this.os('log')).index('id').get(id)
         )
         if (!entry) return false
 
-        for (const key in diff) entry.meta[key] = diff[key];
+        for (const key in diff) entry.metadata[key] = diff[key];
         (await this.os('log', 'write')).put(entry)
         return true
     }
@@ -422,7 +378,7 @@ export class IndexedStore {
      * @TODO -- cache this value
      * @returns {Promise<DeserializedSeq>}
      */
-    async getLastAdded ():Promise<{ seq:string, id:string }|-1> {
+    async getLastAdded ():Promise<{ seq:DeserializedSeq, id:string }|-1> {
         const cursor = await promisify<IDBCursorWithValue|null>(
             (await this.os('log')).openCursor(null, 'prev')
         )
@@ -432,22 +388,32 @@ export class IndexedStore {
             -1)
     }
 
+    // ['hello', { seq: latest, messages: newMsgs }]
+
     /**
-     * Get { received, sent } numbers for last synced
-     * @returns {Promise<{ received:number, sent:number }>}
+     * Get { seq } -- the number for last synced.
+     * This is the last known number that you have sent to the server.
+     *
+     * @returns {Promise<{ seq:DeserializedSeq }>}
      */
-    async getLastSynced ():Promise<{ received:number, sent:number }> {
+    async getLastSynced ():Promise<{ seq:DeserializedSeq }|-1> {
+        // const data:{
+        //     received:number,
+        //     sent:number
+        // } = await promisify<{ received, sent }>(
+        //     (await this.os('extra')).get('lastSynced')
+        // )
+
         const data:{
-            received:number,
-            sent:number
-        } = await promisify<{ received, sent }>(
+            seq:DeserializedSeq
+        } = await promisify<{ seq:DeserializedSeq }>(
             (await this.os('extra')).get('lastSynced')
         )
 
         if (data) {
-            return { received: data.received, sent: data.sent }
+            return data
         } else {
-            return { received: 0, sent: 0 }
+            return -1
         }
     }
 
@@ -455,21 +421,21 @@ export class IndexedStore {
      * @TODO -- delete the content, keep the metadata
      * @TODO -- sync delete actions with the remote store
      *
-     * Remove an action from the local store.
+     * Remove a message from the local store.
      *
      * @param {string} id The ID to delete
-     * @returns {Promise<null|[Action, Metadata]>} `null` if the ID does not
-     * exist, the removed action otherwise.
+     * @returns {Promise<null|EncryptedMessage>} `null` if the ID does not
+     * exist, the removed message otherwise.
      */
-    async remove (id:string):Promise<null|[Action, Metadata]> {
-        const entry = await promisify<Entry>(
+    async remove (id:string):Promise<null|EncryptedMessage> {
+        const entry = await promisify<EncryptedMessage>(
             (await this.os('log')).index('id').get(id)
         )
         if (!entry) return null;
 
-        (await this.os('log', 'write')).delete(entry.seq)
-        entry.meta.seq = entry.seq
-        return [entry.action, entry.meta]
+        (await this.os('log', 'write')).delete(entry.metadata.seq[1])
+
+        return entry
     }
 
     /**
@@ -479,7 +445,7 @@ export class IndexedStore {
      * @param values The `seq` string sent or received
      */
     async setLastSynced (
-        values:Partial<{ sent:string, received:string }>
+        values:Partial<{ received:string, sent:string }>
     ):Promise<void> {
         let data:{
             key:'lastSynced',
@@ -498,6 +464,8 @@ export class IndexedStore {
         (await this.os('extra', 'write')).put(data)
     }
 }
+
+// in fauna, need a query `lastSyncedByUser`
 
 /**
  * Compare the time when two log entries were created.

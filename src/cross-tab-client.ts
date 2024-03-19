@@ -1,13 +1,15 @@
 import { nanoid } from 'nanoid'
 import { PartySocket } from 'partysocket'
 import { createNanoEvents } from 'nanoevents'
+import { IndexedStore } from './store.js'
 import {
+    Metadata,
+    Action,
     DeserializedSeq,
-    IndexedStore,
-    MetaData,
-    deserializeSeq
-} from './store.js'
-import { Action } from './actions.js'
+    ProtocolActions,
+    EncryptedMessage,
+    HelloAction
+} from './actions.js'
 import Debug from '@nichoth/debug'
 const debug = Debug()
 
@@ -17,12 +19,6 @@ export type NodeState =
     | 'disconnected'
     | 'sending'
     | 'synchronized'
-
-/**
- * [msgType, { seq:[timestamp, localSeq, deviceName], id:string }]
- */
-export type SyncMessage =
-    | [type:'hello', body:{ seq:DeserializedSeq, id:string }|-1]
 
 /**
  * Logux has this in the CrossTabClient
@@ -57,8 +53,10 @@ export class CrossTabClient {
     /**
      * The serialized `seq`, and the ID (hash)
      */
-    lastAddedCache:{ seq:string, id:string }|-1 = -1
+    lastAddedCache:DeserializedSeq|-1 = -1
+    lastSyncedCache:{ seq:DeserializedSeq, id:string }|-1 = -1
     lastReceived:number = 0
+    lastSynced:{ seq: DeserializedSeq }|-1 = -1
     received:object = {}
     lastSent:number = 0
     syncing:number = 0
@@ -129,16 +127,12 @@ export class CrossTabClient {
              * should do a sync protocol in here
              */
             await this.initializing
-            const msg:SyncMessage = [
-                'hello',
-                (this.lastAddedCache === -1 ?
-                    -1 :
-                    {
-                        seq: deserializeSeq(this.lastAddedCache.seq) as DeserializedSeq,
-                        id: this.lastAddedCache.id
-                    })
-            ]
-            this.party.send(JSON.stringify(msg))
+            // this.sendHello()
+            // const msg:ProtocolActions['hello'] = [
+            //     'hello',
+            //     { seq: this.lastAddedCache[1] },
+            // ]
+            // this.party.send(JSON.stringify(msg))
         }
 
         this.party.onmessage = (ev) => {
@@ -152,7 +146,8 @@ export class CrossTabClient {
 
         this.userId = opts.userId
         this.store = new IndexedStore({
-            deviceName: 'alice',
+            deviceName: 'alicesDevice',
+            username: 'alice',
             did: 'did:key:z123',
             sign: opts.sign
         })
@@ -172,17 +167,29 @@ export class CrossTabClient {
         this.emitter.on(ev, listener)
     }
 
+    /**
+     * Factory function b/c async
+     */
+    static async create (opts:{
+        host:string;
+        did:`did:key:z${string}`;
+        userId:string;
+        token:string;
+        sign?:(msg:string)=>Promise<string>
+    }):Promise<InstanceType<typeof CrossTabClient>> {
+        const client = new CrossTabClient(opts)
+        await client.initialize()
+        return client
+    }
+
     async initialize ():Promise<void> {
         const [synced, added] = await Promise.all([
             this.store.getLastSynced(),
             this.store.getLastAdded()
         ])
         this.initialized = true
-        this.lastSent = synced.sent
-        this.lastReceived = synced.received
-        // this.lastAddedCache = added
-        // this.lastAddedCache = { seq: added.seq }
-        this.lastAddedCache = added
+        this.lastSynced = synced
+        this.lastAddedCache = added === -1 ? added : added.seq
     }
 
     /**
@@ -209,28 +216,25 @@ export class CrossTabClient {
 
     /**
      * @NOTE
-     * The 'sync' message type.
-     * Send a message ['sync', seq, ...data]
+     * The 'hello' message type.
+     * Send a message ['hello', { seq, messages: ...data }]
      * Where data is everything that the server doesn't have
      */
-    sendSync (seq:number, entries:[Action, MetaData][]):void {
+    sendHello (entries:EncryptedMessage[]):void {
         debug('sending sync...', entries)
 
-        const data:(Action|MetaData)[] = []
-        for (const [action, originMeta] of entries) {
-            const meta:Partial<MetaData> = {}
-            for (const key in originMeta) {
-                if (key !== 'seq') {
-                    meta[key] = originMeta[key]
-                }
-            }
+        /**
+         * In here, should lookup the lastSynced and lastAdded numbers
+         * and the `entries` -- list of messages
+         */
 
-            data.unshift(action, meta as MetaData)
-        }
+        // ['hello', { seq: latest, messages: newMsgs }]
+
+        const msg = HelloAction(this.lastAddedCache, entries)
 
         this.syncing++
         this.setState('sending')
-        this.send(['sync', seq, ...data])
+        this.send(msg)
         if (this.syncing > 0) this.syncing--
         if (this.syncing === 0) {
             this.setState('synchronized')
@@ -240,31 +244,33 @@ export class CrossTabClient {
     /**
      * Add a new action to the log, and send it to the server.
      *
-     * @param {Action} action The action
-     * @param {MetaData} meta Metadata
+     * @param {EncryptedMessage} msg The action
+     * @param {{ sync?:boolean, scope:'post'|'private' }} opts Options
      * @returns {Promise<void>}
      */
     async add (
-        action:Action,
-        opts:{ sync?:boolean } = {}
-    ):Promise<MetaData|null> {
-        const meta = await this.store.add(action)
+        msg:EncryptedMessage,
+        opts:{ sync?:boolean, scope:'post'|'private' }
+    ):Promise<Metadata|null> {
+        const meta = await this.store.add(msg, { scope: opts.scope })
         if (!meta) {
             // should not ever happen
             throw new Error('That ID already exists')
         }
 
-        this.lastAddedCache = {
-            seq: meta.seq,
-            id: meta.id
-        }
+        this.lastAddedCache = meta.seq
 
-        this.emitter.emit('add', [action, meta])
+        // this.lastAddedCache = {
+        //     seq: meta.seq,
+        //     id: meta.id
+        // }
 
-        sendToTabs(this, 'add', [action, meta])
+        this.emitter.emit('add', msg)
+
+        sendToTabs(this, 'add', msg)
 
         if (opts.sync) {
-            this.send(JSON.stringify(action))
+            this.send(JSON.stringify(msg))
             this.store.setLastSynced({ sent: meta.seq })
         }
 

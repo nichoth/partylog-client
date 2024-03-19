@@ -21,22 +21,30 @@ export interface Metadata {
     prev:string|null,
     username:string,
     author:DID,
-    scope:'post'|'private'
+    scope:string
+}
+
+export interface SignedMetadata extends Metadata {
+    signature:string
 }
 
 /**
  * This is for protocol messages.
  * Domain messages are `EncryptedMessage`
  */
-export interface Action<T = void> {
+export interface Action<T> {
     type:string;
-    metadata:Metadata;
-    content:T;
+    data:T
 }
 
 export type EncryptedMessage = {
-    metadata:Metadata,
+    metadata:Metadata|SignedMetadata,
     content:string  // stringified & encrypted JSON object
+}
+
+export type UnencryptedMessage = {
+    metadata:Metadata|SignedMetadata
+    content:object  // `content` gets JSON serialized
 }
 
 /**
@@ -48,21 +56,23 @@ export type EncryptedMessage = {
  * 'hello' is a message with the latest `seq` string we have.
  * 'remove' is the message ID to delete.
  */
-export type Actions = {
+export type ProtocolActions = {
     add: ['add', body:EncryptedMessage];
     /**
      * { since } is the `seq` string before the one starting in `messages`
      */
     // sync: ['sync', body:{ since:string, messages:Message[] }];
-    hello: ['hello', body:{ lastAdded:string, messages?:EncryptedMessage[] }];
+    hello: [
+        'hello',
+        body:{ seq:DeserializedSeq|-1, messages?:EncryptedMessage[] }
+    ];
     remove: ['remove', body:{ id:string }]
 }
 
-export type AnyAction =
-    | Actions['add']
-    // | Actions['sync']
-    | Actions['hello']
-    | Actions['remove']
+export type AnyProtocolAction =
+    | ProtocolActions['add']
+    | ProtocolActions['hello']
+    | ProtocolActions['remove']
 
 /**
  * Create an action to add a single message
@@ -70,7 +80,7 @@ export type AnyAction =
  * @param {Message} body The message
  * @returns {Actions['add']}
  */
-export function AddAction (msg:EncryptedMessage):Actions['add'] {
+export function AddAction (msg:EncryptedMessage):ProtocolActions['add'] {
     return ['add', msg]
 }
 
@@ -97,10 +107,10 @@ export function AddAction (msg:EncryptedMessage):Actions['add'] {
  * @returns {Actions['hello']}
  */
 export function HelloAction (
-    latest:string,
+    latest:DeserializedSeq|-1,
     newMsgs?:EncryptedMessage[]
-):Actions['hello'] {
-    return ['hello', { lastAdded: latest, messages: newMsgs }]
+):ProtocolActions['hello'] {
+    return ['hello', { seq: latest, messages: newMsgs }]
 }
 
 /**
@@ -174,7 +184,7 @@ function ActionCreatorFactory (
 
     function actionCreator<Payload> (
         type:string,
-        commonMeta?:Metadata
+        common?:object
     ) {
         const fullType = base + type
 
@@ -187,14 +197,14 @@ function ActionCreatorFactory (
         }
 
         return Object.assign(
-            (payload:Payload, meta?:Metadata) => {
+            (payload:Payload) => {
                 const action:Partial<Action<Payload>> = {
                     type: fullType,
-                    content: payload,
+                    data: payload,
                 }
 
-                if (commonMeta || meta) {
-                    action.metadata = Object.assign({}, commonMeta, meta)
+                if (common) {
+                    action.data = Object.assign(common, payload)
                 }
 
                 return (action as Action<Payload>)
@@ -213,6 +223,12 @@ function ActionCreatorFactory (
 
 const _createAction = ActionCreatorFactory()
 
-export const ActionCreator = function<T> (type:string) {
+/**
+ * T is the payload properties; the type param is the `type`.
+ *
+ * @param {string} type The action type
+ * @returns Function that will create actions with the given type.
+ */
+export const ActionCreator = function<T> (type:string):(data:T)=>Action<T> {
     return _createAction<T>(type)
 }
