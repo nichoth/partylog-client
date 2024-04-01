@@ -277,3 +277,9 @@ const userStream = db.createStream({
   lte: ['users', charwise.HI]
 })
 ```
+
+---------------------------------------------------
+
+## indexedDB
+
+[Using a Cursor](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API/Using_IndexedDB#using_a_cursor)

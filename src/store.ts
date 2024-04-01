@@ -1,12 +1,17 @@
 import { createDebug } from '@nichoth/debug'
 // import { EntryStream } from 'level-web-stream'
 import { toString } from 'uint8arrays'
+import {
+    openDB,
+    IDBPDatabase,
+    deleteDB,
+    DBSchema,
+    IDBPCursorWithValue
+} from '@bicycle-codes/idb'
 import stringify from 'json-canon'
 import { blake3 } from '@noble/hashes/blake3'
 import ts from 'monotonic-timestamp'
-import { BrowserLevel } from 'browser-level'
 import { createDeviceName } from '@bicycle-codes/identity'
-import charwise from 'charwise'
 import {
     Action,
     Metadata,
@@ -18,20 +23,44 @@ import {
 } from './actions.js'
 const debug = createDebug()
 
+export const PROOF_ENCODING = 'base64pad'
+
 const VERSION = 1
 
 debug('version', VERSION)
 
-export interface LogPage<T> {
-    /**
-     * Pagination page.
-     */
-    entries:[Action<T>, Metadata][]
+interface LogDB extends DBSchema {
+    log: {
+        key:string;
+        value:UnencryptedMessage|EncryptedMessage;
+        indexes: {
+            id:string;
+            seq:string;
+            localSeq:string;
+            scope:string;
+            username:string;
+            time:number;
+        }
+    };
+    extra: {
+        key:string;
+        value:{
+            localSeq:number
+        };
+        indexes: {
+            localSeq:string
+        }
+    };
 
-    /**
-     * Next page loader.
-     */
-    next?():Promise<LogPage<T>>
+    // products: {
+    //     value: {
+    //         name: string;
+    //         price: number;
+    //         productCode: string;
+    //     };
+    //     key: string;
+    //     indexes: { 'by-price': number };
+    // };
 }
 
 export interface ReadonlyListener<
@@ -40,39 +69,6 @@ export interface ReadonlyListener<
 > {
     (action:ListenerAction, meta:LogMeta):void
 }
-
-export class LevelStore {
-    level:InstanceType<typeof BrowserLevel>
-    readonly name:string = 'partylog'
-    readonly deviceName:string
-
-    constructor ({ deviceName }:{ deviceName:string }) {
-        this.deviceName = deviceName
-        this.level = new BrowserLevel('partylog', {
-            keyEncoding: charwise
-        })
-    }
-
-    /**
-     * Log entries must be sorted by seq, and have and index for our username.
-     */
-    async getLastAdded () {
-        // const iterator = this.level.iterator({ reverse: true, limit: 1 })
-        // for (const [key, value] of iterator) {
-        //     console.log('key', key, value)
-        // }
-    }
-
-    // async add (
-    //     content:object,
-    //     { scope }:{ scope:'post'|'private' },
-    //     prev?:EncryptedMessage|UnencryptedMessage
-    // ):Promise<Metadata|SignedMetadata|null> {
-    //     const lastAdded = await this.getLastAdded()
-    // }
-}
-
-export const PROOF_ENCODING = 'base64pad'
 
 /**
  * A log store for IndexedDB.
@@ -86,132 +82,93 @@ export class IndexedStore {
     readonly name:string
     readonly username:string
     readonly deviceName:string
-    // a map from timestamp to boolean
-    readonly adding:Record<string, boolean>
-    readonly db:Promise<IDBDatabase>
-    readonly level:InstanceType<typeof BrowserLevel>
+    readonly adding:Record<string, boolean> = {}
+    private _db?:IDBPDatabase<LogDB>
     readonly did:DID
     readonly sign?:(meta:string)=>Promise<string>
-
-    /**
-     * Factory function b/c async
-     */
-    static async create (opts:{
-        username:string,
-        did:DID,
-        sign?:(meta:string)=>Promise<string>
-    }) {
-        const deviceName = await createDeviceName(opts.did)
-        const store = new IndexedStore({ ...opts, deviceName })
-        return store
-    }
 
     constructor (opts:{
         username:string,
         deviceName:string,
         did:DID,
+        idb:IDBPDatabase<LogDB>,
         sign?:(meta:string)=>Promise<string>
+        version?:number
     }, name = 'partylog') {
         this.name = name
         this.deviceName = opts.deviceName
         this.username = opts.username
-        this.adding = {}
         this.sign = opts.sign
-
         /**
          * `did` is added to metadata as the `author` field.
          */
         this.did = opts.did
+    }
 
-        // HERE -- what is the name passed to BrowserLevel?
-        // is this like the `name` passed to the objectStore method of IDB?
-        this.level = new BrowserLevel('log')
+    /**
+     * Factory function b/c async.
+     *
+     * @param {object} opts parameters
+     * @param {string} opts.username A unique username
+     * @param {DID} opts.did The DID for the device
+     * @param {(meta:string)=>Promise<string>} opts.sign A function that will
+     * sign entries.
+     * @returns {Promise<InstanceType<typeof IndexedStore>>}
+     */
+    static async create (opts:{
+        username:string,
+        did:DID,
+        sign?:(meta:string)=>Promise<string>
+    }):Promise<InstanceType<typeof IndexedStore>> {
+        const deviceName = await createDeviceName(opts.did)
+        const idb:IDBPDatabase<LogDB> = await openDB<LogDB>('partylog', VERSION, {
+            upgrade (db) {
+                const log = db.createObjectStore('log', {
+                    autoIncrement: false,
+                    keyPath: 'metadata.seq'  // sort by absolute timestamp
+                })
+                log.createIndex('id', 'metadata.id', { unique: true })
+                log.createIndex('seq', 'metadata.seq', { unique: true })
+                log.createIndex('localSeq', 'metadata.localSeq', {
+                    unique: true
+                })
+                log.createIndex('scope', 'metadata.scope', {
+                    unique: false
+                })
+                log.createIndex('username', 'metadata.username', {
+                    unique: false
+                })
 
-        this.db = new Promise((resolve, reject) => {
-            const req = indexedDB.open(this.name, VERSION)
-            req.onerror = err => reject(err)
-            req.onsuccess = () => resolve(req.result)
-
-            /**
-             * This handler fires when a new database is created and indicates
-             * either that one has not been created before, or a new version
-             * was submitted with window.indexedDB.open()
-             * @see https://developer.mozilla.org/en-US/docs/Web/API/IDBObjectStore/createIndex#examples
-             */
-            req.onupgradeneeded = function (ev) {
-                const db = req.result
-
-                let log:IDBObjectStore
-                if (ev.oldVersion < 1) {
-                    log = db.createObjectStore('log', {
-                        // autoIncrement: true,
-                        autoIncrement: false,
-                        keyPath: 'metadata.seq'  // sort by timestamp
-                    })
-
-                    // the hash of the metadata
-                    // log.createIndex('id', 'metadata.id', { unique: true })
-                    // log.createIndex('localSeq', 'metadata.localSeq', { unique: true })
-
-                    // log.createIndex('id', 'metadata.id', { unique: true })
-                    log.createIndex('seq', 'metadata.seq', { unique: true })
-                    log.createIndex('scope', 'metadata.scope', { unique: false })
-                    log.createIndex('username', 'metadata.username', {
-                        unique: false
-                    })
-
-                    // if the server gets 2 actions created at the same time
+                log.createIndex('time', 'metadata.timestamp', {
+                    // server could get 2 actions created at the same time
                     // by different devices
-                    log.createIndex('time', 'metadata.timestamp', { unique: false })
-                    db.createObjectStore('extra', { keyPath: 'key' })
-                }
+                    unique: false
+                })
+
+                db.createObjectStore('extra', { keyPath: 'key' })
             }
-
-            /**
-             * __Get data from the DB__
-             * db.transaction('log')
-             *   .objectStore(storeName)
-             *   .index('seq')
-             *   .get(mySeqValue)
-             */
         })
+
+        const store = new IndexedStore({ ...opts, deviceName, idb })
+        return store
+    }
+
+    async paginate ():Promise<IDBPCursorWithValue<LogDB>|null> {
+        const cursor = await this._db!.transaction<
+            'log'|'extra',
+            'readonly'
+        >('log').store.openCursor()
+
+        return cursor
     }
 
     /**
-     * @TODO
-     * Do we want to do this?
-     */
-    // async getRecordsSinceOffline () {
-    //     const os = await this.os('log')
-    //     const index = os.index('type')
-    //     const cursor = await promisify<IDBCursorWithValue|null>(
-    //         index.openCursor('offline', 'prev')
-    //     )
-    //     cursor?.value
-    // }
-
-    /**
-     * Get a new objectstore.
-     *
-     * @param {'log'|'extra'} name Object store name, 'log' | 'extra'
-     * @param {'write'} [write] Writable or read only?
-     * @returns {Promise<IDBObjectStore>}
-     */
-    async os (name:'log'|'extra', write?:'write'):Promise<IDBObjectStore> {
-        const mode = write ? 'readwrite' : 'readonly'
-        return (await this.db).transaction(name, mode).objectStore(name)
-    }
-
-    /**
-     * Add a new domain message to `IndexedDB`. This will create metadata.
-     *
-     * Should create the `proof` here, so content needs to be unencrypted.
-     *
-     * ID is the hash of the metadata.
+     * Add a new domain message to `IndexedDB`. This method creates
+     * the metadata.
      *
      * @param {object} content The message content, unencrypted b/c we calculate
      * the `proof` hash here.
-     * @param {{ scope:'post'|'private' }} prev The 'scope' field.
+     * @param {{ scope:'post'|'private' }} scope The 'scope' field.
      * @param {EncryptedMessage|UnencryptedMessage} [prev] The previous message,
      * for the Merkle chain.
      * @returns {Promise<null|Metadata>} Return `null` if the add operation
@@ -225,13 +182,8 @@ export class IndexedStore {
     ):Promise<Metadata|SignedMetadata|null> {
         const lastAdded = await this.getLastAdded()
         let localSeq:number
-        if (lastAdded.seq === -1) localSeq = 0
-        else localSeq = (lastAdded.seq[1] + 1)
-
-        /**
-         * Need to make a decision about storing only our own posts,
-         * or the posts of all friends.
-         */
+        if (lastAdded.localSeq === -1) localSeq = 0
+        else localSeq = lastAdded.localSeq + 1
 
         const timestamp:number = ts()
 
@@ -239,11 +191,14 @@ export class IndexedStore {
         // time + local seq integer + deviceName
         // const seq = '' + time + ':' + localSeq + ':' + this.deviceName
         const seq = [timestamp, localSeq, this.deviceName] as const
-
         const proof = toString(blake3(stringify(content)), PROOF_ENCODING)
 
-        let newMetadata:Omit<Omit<SignedMetadata, 'id'>, 'signature'> = {
+        type PendingMetadata = Omit<Omit<SignedMetadata, 'id'>, 'signature'>
+
+        let newMetadata:PendingMetadata = {
             prev: prev ? prev.metadata!.id : null,
+            deviceName: this.deviceName,
+            localSeq,
             seq,
             proof,
             scope,
@@ -281,20 +236,12 @@ export class IndexedStore {
             content: JSON.stringify(content)
         }
 
-        if (this.adding[localSeq]) {
+        if (await this._db!.getFromIndex('log', 'id', entry.metadata.id)) {
+            // will not happen
             return null
         }
-        this.adding[localSeq] = true
 
-        // this will not happen
-        const exist = await promisify(
-            (await this.os('log')).index('id').get(entry.metadata.id)
-        )
-
-        if (exist) return null
-
-        await (await this.os('log', 'write')).add(entry)
-        delete this.adding[localSeq]
+        await this._db?.put('log', entry, entry.metadata.id)
 
         return newMetadata as Metadata|SignedMetadata
     }
@@ -305,107 +252,69 @@ export class IndexedStore {
      * @param {string} id The ID
      * @returns {Promise<[Action<T>, Metadata]|[null, null]>}
      */
-    async byId (id:string):Promise<UnencryptedMessage|null> {
-        const result = await promisify<UnencryptedMessage>(
-            (await this.os('log')).index('id').get(id)
-        )
-
-        if (result) return result
-        return null
+    async byId (id:string):Promise<
+        UnencryptedMessage|EncryptedMessage|undefined
+    > {
+        const res = await this._db?.getFromIndex('log', 'id', id)
+        return res
     }
-
-    // /**
-    //  * Update the metadata of the given ID.
-    //  *
-    //  * @param {string} id The ID to update
-    //  * @param {Partial<Metadata>} diff The updates
-    //  * @returns {Promise<boolean>} True if update was successful, false if the
-    //  * given ID was not found.
-    //  */
-    // async changeMeta (id:string, diff:Partial<Metadata>):Promise<boolean> {
-    //     const entry = await promisify<EncryptedMessage>(
-    //         (await this.os('log')).index('id').get(id)
-    //     )
-    //     if (!entry) return false
-
-    //     for (const key in diff) entry.metadata[key] = diff[key];
-    //     (await this.os('log', 'write')).put(entry)
-    //     return true
-    // }
 
     /**
      * Delete this database.
-     * @returns {Promise<void>}
+     * @returns {void}
      */
-    async clean () {
-        (await this.db).close()
-        indexedDB.deleteDatabase(this.name)
+    async clean ():Promise<void> {
+        this._db?.close()
+        await deleteDB(this.name)
     }
 
     /**
-     * Return a Promise with the first page. The Page object has a property
-     * `entries` with part of the results, and a `next` property with a
-     * function to load the next page. If this was the last page, `next`
-     * property should be empty.
-     *
-     * We need a pagination API because the log could be very big.
-     *
-     * @param {{ index:string, order:'time' }} opts Query options.
-     * @returns {Promise<LogPage<T>>} Promise with first page.
+     * Get messages that have been added to the store, but have not
+     * been sent to the server yet.
      */
-    async get<T=void> ({ index, order }:{
-        index?:string;
-        order?:'time'
-    } = {}):Promise<LogPage<T>> {
-        return new Promise((resolve, reject) => {
-            this.os('log').then(log => {
-                let request:IDBRequest<IDBCursorWithValue|null>
-                if (index) {
-                    if (order === 'time') {
-                        request = log.index('time').openCursor(null, 'prev')
-                    } else {
-                        const keyRange = IDBKeyRange.only(index)
-                        request = log.index('indexes').openCursor(keyRange, 'prev')
-                    }
-                } else if (order === 'time') {
-                    // not index, but order === time
-                    request = log.index('time').openCursor(null, 'prev')
-                } else {
-                    // not index, and order !== time
-                    request = log.openCursor(null, 'prev')
-                }
+    async getDiff ():Promise<IDBPCursorWithValue<
+        LogDB,
+        ['log'],
+        'log'
+    >|undefined|null> {
+        const [synced, added] = await Promise.all([
+            this.getLastSynced(),
+            this.getLastAdded()
+        ])
 
-                request.onerror = (err) => { reject(err) }
+        if (added.localSeq > synced.localSeq) {
+            const store = this._db?.transaction('log', 'readonly')
+                .objectStore('log')
 
-                const entries:[Action<T>, Metadata][] = []
-                request.onsuccess = () => {
-                    const cursor = request.result
-                    if (!cursor) return resolve({ entries })
-                    if (!index || cursor.value.indexes.includes(index)) {
-                        cursor.value.meta.seq = cursor.value.seq
-                        entries.unshift([cursor.value.action, cursor.value.meta])
-                    }
-                    cursor.continue()
-                }
-            })
-        })
+            const range:IDBKeyRange = IDBKeyRange.bound(
+                synced.localSeq,
+                added.localSeq
+            )
+
+            const cursor = await store!.openCursor(range)
+
+            return cursor
+        }
+
+        return null
     }
 
     /**
      * Get the last added `seq` number of actions.
      * @TODO -- cache this value
-     * @returns {Promise<{ seq:DeserializedSeq, id:string }|-1>}
+     * @returns {Promise<{
+     *   localSeq:number,
+     *   seq:DeserializedSeq,
+     *   id:string
+     * }|{ localSeq:-1 }>}
      */
-    async getLastAdded ():Promise<{ seq:DeserializedSeq|-1, id?:string }> {
-        // const cursor = await promisify<IDBCursorWithValue|null>(
-        //     (await this.os('log')).openCursor(null, 'prev')
-        // )
-
-        const cursor = await promisify<IDBCursorWithValue|null>(
-            (await this.os('log'))
-                .index('username')
-                .openCursor(this.username, 'prev')
-        )
+    async getLastAdded ():Promise<{
+        localSeq:number,
+        seq:DeserializedSeq,
+        id:string
+    }|{ localSeq:-1 }> {
+        const cursor = (await this._db?.transaction('log')
+            .store.openCursor(null, 'prev'))
 
         /**
          * Need to get log entries by our username
@@ -414,37 +323,27 @@ export class IndexedStore {
          * > range object
          */
 
-        return cursor ?
-            { seq: cursor.value.metadata.seq, id: cursor.value.metadata.id } :
-            { seq: -1 }
+        return (cursor ?
+            {
+                localSeq: cursor.value.metadata.localSeq,
+                seq: cursor.value.metadata.seq,
+                id: cursor.value.metadata.id
+            } :
+            { localSeq: -1 })
     }
 
-    // ['hello', { seq: latest, messages: newMsgs }]
-
     /**
-     * Get { seq } -- the number for last synced.
-     * This is the last known number that you have sent to the server.
+     * Get { localSeq }, the most recent `seq` number synced from this device.
      *
-     * @returns {Promise<{ seq:DeserializedSeq }>}
+     * @returns {Promise<{ localSeq:number }>}
      */
-    async getLastSynced ():Promise<{ seq:DeserializedSeq|-1 }> {
-        // const data:{
-        //     received:number,
-        //     sent:number
-        // } = await promisify<{ received, sent }>(
-        //     (await this.os('extra')).get('lastSynced')
-        // )
-
-        const data:{
-            seq:DeserializedSeq
-        } = await promisify<{ seq:DeserializedSeq }>(
-            (await this.os('extra')).get('lastSynced')
-        )
+    async getLastSynced ():Promise<{ localSeq:number }> {
+        const data = await this._db?.get('extra', 'lastSynced')
 
         if (data) {
             return data
         } else {
-            return { seq: -1 }
+            return { localSeq: -1 }
         }
     }
 
@@ -458,13 +357,9 @@ export class IndexedStore {
      * @returns {Promise<null|EncryptedMessage>} `null` if the ID does not
      * exist, the removed message otherwise.
      */
-    async remove (id:string):Promise<null|EncryptedMessage> {
-        const entry = await promisify<EncryptedMessage>(
-            (await this.os('log')).index('id').get(id)
-        )
-        if (!entry) return null;
-
-        (await this.os('log', 'write')).delete(entry.metadata.seq[1])
+    async remove (id:string):Promise<EncryptedMessage|UnencryptedMessage|undefined> {
+        const entry = await this._db?.get('log', id)
+        await this._db?.delete('log', id)
 
         return entry
     }
@@ -476,30 +371,11 @@ export class IndexedStore {
      * @param values The `seq` string sent or received
      */
     async setLastSynced (
-        value:{ seq:DeserializedSeq }
+        value:{ localSeq:number }
     ):Promise<void> {
-        // const data:{
-        //     key:'lastSynced',
-        //     seq:DeserializedSeq|-1
-        //     // received:string|-1,
-        //     // sent:string|-1
-        // } = await promisify((await this.os('extra')).get('lastSynced'));
-
-        // if (!data) data = { key: 'lastSynced', received: -1, sent: -1 }
-        // if (typeof values.sent !== 'undefined') {
-        //     data.sent = values.sent
-        // }
-        // if (typeof values.received !== 'undefined') {
-        //     data.received = values.received
-        // }
-
-        (await this.os('extra', 'write')).put(value)
-
-        // await this.os('extra', 'write').put(data)
+        await this._db?.put('extra', value, 'lastSynced')
     }
 }
-
-// in fauna, need a query `lastSyncedByUser`
 
 /**
  * Compare the time when two log entries were created.
@@ -526,35 +402,9 @@ export function isFirstOlder (
 }
 
 /**
- * Take an IDB request, turn it into a promise.
- *
- * @param request IDB request
- * @returns {Promise<IDBRequest['result']>}
- */
-function promisify<T> (request:IDBRequest<T>) {
-    return new Promise<T>((resolve, reject) => {
-        rejectify(request, reject)
-        request.onsuccess = () => {
-            resolve(request.result)
-        }
-    })
-}
-
-/**
- * Take an indexed DB request, and reject the promise on error.
- *
- * @param request Indexed DB request
- * @param reject Reject function to call with error
- */
-function rejectify (request:IDBRequest, reject:(err?)=>void) {
-    request.onerror = () => {
-        reject(request.error)
-    }
-}
-
-/**
  * Take a `seq` as a string, return an array of its contents.
- * @param {string} seq The `seq` string to parse
+ * @param {string} seq The `seq` string to parse --
+ *   `timestamp:localSeq:deviceName`
  * @returns {DeserializedSeq} An array of `seq` contents
  */
 export function deserializeSeq (

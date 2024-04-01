@@ -10,3 +10,9 @@ db.createReadStream({
   lte: String.fromCharCode(key.charCodeAt(0) + 1)
 })
 ```
+
+-------------------------------------------------------------
+
+## TODO
+
+* [ ] Should be able to get the user profile doc from a device ID.

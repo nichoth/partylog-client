@@ -73,6 +73,9 @@ export async function State ():Promise<{
 
         // @ts-expect-error for DEV
         window.client = client
+
+        // @ts-expect-error DEV
+        window.store = client.store
     }
 
     /**
@@ -111,3 +114,12 @@ State.Decrease = async function (state:Awaited<ReturnType<typeof State>>) {
     const meta = state._client.add({ type: 'decrement' }, { scope: 'private' })
     debug('decrementing...', meta)
 }
+
+State.CreateProfile = async function (
+    state:Awaited<ReturnType<typeof State>>,
+    humanName
+) {
+    debug('human name', humanName)
+    state._client.party.send('hello')
+}
+

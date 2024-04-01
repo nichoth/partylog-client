@@ -17,7 +17,7 @@ sees that the `last_synced` message is 7, but the `last_added` message (the
 most recent message added to IDB) is at 9.
 
 So the client sends a 'hello' message that includes messages 8 & 9, everything
-larger than the `last_synced` record that it has.
+larger than the `last_synced` record.
 
 The server needs to append the two new messages to its log for that user.
 
@@ -147,3 +147,12 @@ Each post gets its own key, that is encrypted by the audience that points to it.
 Need to implement
   * fauna log store
   * indexedDB / level DB store
+
+
+--------------------------------------------------------------------------
+
+Would be better to think of it as a single log per username.
+
+Just keep 3 separate logs, one for each device.
+
+In the DB/app logic you can merge the 3 feeds into one.
