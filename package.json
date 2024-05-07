@@ -44,7 +44,7 @@
     "@typescript-eslint/eslint-plugin": "^7.1.1",
     "@typescript-eslint/parser": "^7.1.1",
     "auto-changelog": "^2.4.0",
-    "esbuild": "^0.20.1",
+    "esbuild": "^0.21.0",
     "eslint": "^8.57.0",
     "eslint-config-standard": "^17.1.0",
     "faunadb": "^4.8.0",
