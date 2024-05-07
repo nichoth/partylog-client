@@ -5,12 +5,13 @@ import {
 } from '@bicycle-codes/request'
 import { parseToken } from '@bicycle-codes/request/parse'
 import { createDeviceName, DID } from '@bicycle-codes/identity'
+import {
+    AnyProtocolAction,
+    EncryptedMessage,
+    UnencryptedMessage
+} from '../../src/actions.js'
 import { getClient } from './get-client.js'
-// import { ActionCreator } from '../../src/actions.js'
-import { AnyProtocolAction, EncryptedMessage, UnencryptedMessage } from '../../src/actions.js'
 const { query: q, Client } = fauna
-
-// const ErrorAction = ActionCreator<{ error:string }>('error')
 
 export default class WebSocketServer implements Party.Server {
     room:Party.Room
@@ -23,7 +24,9 @@ export default class WebSocketServer implements Party.Server {
     }
 
     async init () {
-        // there is no lastAdded for the DB as a whole!
+        // there is no lastAdded for the DB as a whole,
+        // only per-user
+
         // const lastAdded = await this.client.query(
         //     q.Get(q.Match(q.Index('log_by_user')))
         // )
@@ -32,8 +35,6 @@ export default class WebSocketServer implements Party.Server {
     async onConnect (conn:Party.Connection, ctx:Party.ConnectionContext) {
         const token = new URL(ctx.request.url).searchParams.get('token') ?? ''
 
-        // in real life, we would check the token author's DID,
-        // and verify that they are an allowed user
         const parsed = parseToken(token)
         const { author } = parsed
         const device = await createDeviceName(author)
@@ -58,6 +59,10 @@ export default class WebSocketServer implements Party.Server {
             // get token from request query string
             const token = new URL(request.url).searchParams.get('token') ?? ''
 
+            if (!token) {
+                return new Response('Unauthorized', { status: 401 })
+            }
+
             // in real life, we would check the token author's DID,
             // and verify that they are an allowed user
             const parsed = parseToken(token)
@@ -76,7 +81,7 @@ export default class WebSocketServer implements Party.Server {
         sender: Party.Connection<unknown>
     ):Promise<void> {
         // in here, need to process the incoming message
-        // types -- 'hello', 'add', 'remove'
+        // types -- 'hello', 'add', 'remove', 'edit'
         let msg:AnyProtocolAction
 
         try {

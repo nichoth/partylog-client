@@ -1,5 +1,4 @@
 import { createDebug } from '@nichoth/debug'
-// import { EntryStream } from 'level-web-stream'
 import { toString } from 'uint8arrays'
 import {
     openDB,

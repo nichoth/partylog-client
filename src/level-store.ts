@@ -1,4 +1,5 @@
 import { BrowserLevel } from 'browser-level'
+import { EntryStream } from 'level-web-stream'
 import charwise from 'charwise'
 
 export class LevelStore {

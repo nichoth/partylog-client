@@ -5,7 +5,6 @@ import { createDeviceName } from '@bicycle-codes/identity'
 import { IndexedStore } from './store.js'
 import {
     Metadata,
-    DeserializedSeq,
     EncryptedMessage,
     HelloAction,
     AnyProtocolAction,
@@ -82,7 +81,9 @@ export class CrossTabClient {
          */
         this.party = new PartySocket({
             party: 'main',
-            id: opts.username,
+            // note that the id needs to be unique per connection,
+            // not per user, so e.g. multiple devices or tabs need a different id
+            // id: opts.username,  // @FIXME <-- should be deviceName, not username
             room: 'main',
             host: opts.host,
             startClosed: true,
@@ -233,15 +234,14 @@ export class CrossTabClient {
 
         // need to compare the seq numbers for *this user*
 
-        // use an index to get the right docs
-
         if (lastAdded.localSeq > lastSynced.localSeq) {
             /**
              * @TODO
              * get the difference between last synced and last added
              */
-            debug('sending hello...', entries)
-            const msg = HelloAction(this.lastAddedCache.localSeq, entries)
+            debug('sending hello...', 'entries')
+            // @TODO
+            const msg = HelloAction(this.lastAddedCache.localSeq, [])
             this.send(msg)
         } else {
             // we have not added any new messages while we were offline
@@ -281,7 +281,7 @@ export class CrossTabClient {
         opts:{ sync?:boolean, scope:'post'|'private' }
     ):Promise<Metadata|null> {
         const sync = opts.sync ?? true
-        const meta = await (await this.store).add(msg, { scope: opts.scope })
+        const meta = await (await this.store!).add(msg, { scope: opts.scope })
         if (!meta) {
             // should not ever happen
             throw new Error('That ID already exists')
@@ -292,13 +292,13 @@ export class CrossTabClient {
             content: JSON.stringify(msg)
         })
 
-        this.lastAddedCache = { seq: meta.seq }
+        this.lastAddedCache = { localSeq: meta.localSeq }
         this.emitter.emit('add', msg)
         this.sendToTabs('add', msg)
 
         if (sync) {
             this.send(action);
-            (await this.store).setLastSynced({ seq: meta.seq })
+            (await this.store!).setLastSynced({ localSeq: meta.localSeq })
         }
 
         return meta

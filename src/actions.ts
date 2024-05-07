@@ -70,7 +70,7 @@ export type ProtocolActions = {
     /**
      * [
      *  'edit',
-     *  { id:string, patch: { content: JSON string of new content object } }
+     *  { id:string, patch: { content: <JSON string of new content object> } }
      * ]
      */
     edit: [
