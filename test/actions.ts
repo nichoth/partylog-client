@@ -1,10 +1,9 @@
 import { test } from '@bicycle-codes/tapzero'
-import { ActionCreatorFactory, ActionCreator } from '../src/actions.js'
+import { ActionCreator } from '../src/actions.js'
 
 test('action creating', t => {
     // this is an internal function, undocumented
-    const createAction = ActionCreatorFactory()
-    const renameUser = createAction<{
+    const renameUser = ActionCreator<{
         userId:string,
         name:string
     }>('user/rename')

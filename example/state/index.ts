@@ -1,14 +1,8 @@
 import { Signal, signal } from '@preact/signals'
 import { program as createProgram } from '@oddjs/odd'
-import { create as createIdentity, signAsString } from '@bicycle-codes/identity'
+import { create as createIdentity } from '@bicycle-codes/identity'
 import { TokenFactory } from '@bicycle-codes/request'
 import Route from 'route-event'
-import {
-    increment,
-    decrement,
-    ActionTypes,
-    setCount
-} from './actions.js'
 import { CrossTabClient } from '../../src/cross-tab-client.js'
 import Debug from '@nichoth/debug'
 const debug = Debug()
@@ -30,44 +24,19 @@ export async function State ():Promise<{
         namespace: { creator: 'test', name: 'testing' },
     })
     const { crypto } = program.components
-    const keystore = crypto.keystore
     const createToken = TokenFactory(crypto)
     const token = await createToken()  // read & update `__seq` in localStorage
-
     const me = await createIdentity(crypto, { humanName: 'alice' })
 
     debug('Your DID -- ', me.rootDID)
 
-    const client = new CrossTabClient({
+    const client = await CrossTabClient.create({
+        did: me.rootDID,
+        token,
         host: import.meta.env.DEV ?
             'localhost:1999' :  // local partykit server
             'partylog.nichoth.partykit.dev',
-        userId: 'anonymous',
-        did: me.rootDID,
-        token,
-        // we are signing our actions
-        sign: (msg:string) => {
-            return signAsString(keystore, msg)
-        }
     })
-
-    /**
-     * What does the client do?
-     *   - elect a leader tab, so there is 1 websocket connection
-     *     per browser
-     *   - handle new messages. When you create a new message,
-     *     the client does 2 things:
-     *       + write it to the local store,
-     *       + send it to the server
-     *   - handle sync. We don't want to think about sync in the app domain
-     *
-     * It is the interface to the store + websocket.
-     */
-
-    /**
-     * @TODO
-     * Subscribe to changes
-     */
 
     debug('the client', client)
 
@@ -84,7 +53,7 @@ export async function State ():Promise<{
         window.state = state
 
         // @ts-expect-error dev
-        window.clearLogux = async function () {
+        window.clearIDB = async function () {
             const dbNames = (await indexedDB.databases())
                 .map(db => db.name)
                 .filter(name => name!.includes('partylog'))
@@ -101,50 +70,28 @@ export async function State ():Promise<{
                 }
             }
         }
-    }
 
-    if (import.meta.env.DEV) {
         // @ts-expect-error for DEV
         window.client = client
+
+        // @ts-expect-error DEV
+        window.store = client.store
     }
 
     /**
-     * Here we process the actions
+     * Here, process the domain actions
      */
     client.on('add', (action) => {
         // this is an action that we added locally
         // (not something added by another device)
         debug('got "add" event', action)
-
-        if (!(ActionTypes[action.type])) {
-            // then this is not something we care about
-            return
-        }
-
-        /**
-         * @TODO -- how to get types for the action?
-         */
-        if (setCount.match(action)) {
-            debug('**count/set**', action.data!.value)
-            state.count.value = action.data!.value
-        }
-
-        if (decrement.match(action)) {
-            debug('count/decrement', action)
-            state.count.value--
-        }
-
-        if (increment.match(action)) {
-            debug('count/increment', action)
-            state.count.value++
-        }
     })
 
     /**
      * Handle route changes
      */
     onRoute((path:string, data) => {
-        const newPath = path.replace('/logux-party/', '/')  // <- for github pages
+        const newPath = path.replace('/partylog-client/', '/')  // <- for github pages
         state.route.value = newPath
         // handle scroll state like a web browser
         // (restore scroll position on back/forward)
@@ -159,20 +106,20 @@ export async function State ():Promise<{
 }
 
 State.Increase = async function (state:Awaited<ReturnType<typeof State>>) {
-    const inc = increment()
-    debug('increment action', inc)
-    // const meta = await state._client.log.add(inc, { sync: true })
-    const meta = state._client.add(inc)
-    debug('the increment meta', meta)
+    const meta = state._client.add({ type: 'increment' }, { scope: 'private' })
+    debug('incrementing...', meta)
 }
 
 State.Decrease = async function (state:Awaited<ReturnType<typeof State>>) {
-    const dec = decrement()
-    debug('decrement action', dec)
-    state._client.add(dec, { sync: true })
-
-    // for the old logux client:
-    // await state._client.log.add(dec, { sync: true })
-    // add to the log, but don't sync:
-    // state._client.log.add(dec, { sync: false })
+    const meta = state._client.add({ type: 'decrement' }, { scope: 'private' })
+    debug('decrementing...', meta)
 }
+
+State.CreateProfile = async function (
+    state:Awaited<ReturnType<typeof State>>,
+    humanName
+) {
+    debug('human name', humanName)
+    state._client.party.send('hello')
+}
+
